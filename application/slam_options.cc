@@ -8,6 +8,7 @@
 #include "cartographer/frontend/motion_filter.h"
 #include "cartographer/frontend/pose_extrapolator.h"
 #include "cartographer/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/submap_2d.h"
 
 namespace cartographer {
@@ -182,6 +183,17 @@ LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
           parameter_dictionary
               ->GetDictionary("loop_closure_adaptive_voxel_filter")
               .get());
+  if (parameter_dictionary->HasKey("use_online_correlative_scan_matching")) {
+    options.set_use_online_correlative_scan_matching(
+        parameter_dictionary->GetBool("use_online_correlative_scan_matching"));
+  }
+  if (parameter_dictionary->HasKey("real_time_correlative_scan_matcher")) {
+    *options.mutable_real_time_correlative_scan_matcher_options() =
+        scan_matching::CreateRealTimeCorrelativeScanMatcherOptions2D(
+            parameter_dictionary
+                ->GetDictionary("real_time_correlative_scan_matcher")
+                .get());
+  }
   *options.mutable_ceres_scan_matcher_options() =
       scan_matching::CreateCeresScanMatcherOptions2D(
           parameter_dictionary->GetDictionary("ceres_scan_matcher").get());

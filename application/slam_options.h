@@ -65,6 +65,13 @@ struct FastCorrelativeScanMatcherOptions2D {
   CARTOGRAPHER_OPTION_SCALAR(int, branch_and_bound_depth)
 };
 
+struct RealTimeCorrelativeScanMatcherOptions2D {
+  CARTOGRAPHER_OPTION_SCALAR(double, linear_search_window)
+  CARTOGRAPHER_OPTION_SCALAR(double, angular_search_window)
+  CARTOGRAPHER_OPTION_SCALAR(double, translation_delta_cost_weight)
+  CARTOGRAPHER_OPTION_SCALAR(double, rotation_delta_cost_weight)
+};
+
 struct ProbabilityGridRangeDataInserterOptions2D {
   CARTOGRAPHER_OPTION_SCALAR(double, hit_probability)
   CARTOGRAPHER_OPTION_SCALAR(double, miss_probability)
@@ -126,6 +133,9 @@ struct LocalTrajectoryBuilderOptions2D {
                             adaptive_voxel_filter_options)
   CARTOGRAPHER_OPTION_FIELD(AdaptiveVoxelFilterOptions,
                             loop_closure_adaptive_voxel_filter_options)
+  CARTOGRAPHER_OPTION_SCALAR(bool, use_online_correlative_scan_matching)
+  CARTOGRAPHER_OPTION_FIELD(RealTimeCorrelativeScanMatcherOptions2D,
+                            real_time_correlative_scan_matcher_options)
   CARTOGRAPHER_OPTION_FIELD(CeresScanMatcherOptions2D,
                             ceres_scan_matcher_options)
   CARTOGRAPHER_OPTION_FIELD(MotionFilterOptions, motion_filter_options)
@@ -138,6 +148,10 @@ struct LocalTrajectoryBuilderOptions2D {
   AdaptiveVoxelFilterOptions*
   mutable_loop_closure_adaptive_voxel_filter_options() {
     return &loop_closure_adaptive_voxel_filter_options_;
+  }
+  RealTimeCorrelativeScanMatcherOptions2D*
+  mutable_real_time_correlative_scan_matcher_options() {
+    return &real_time_correlative_scan_matcher_options_;
   }
   CeresScanMatcherOptions2D* mutable_ceres_scan_matcher_options() {
     return &ceres_scan_matcher_options_;

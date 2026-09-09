@@ -47,6 +47,7 @@ set(ALL_LIBRARY_SRCS
   backend/constraint_engine_2d.cc
   scan_matching/correlative_scan_matcher_2d.cc
   scan_matching/fast_correlative_scan_matcher_2d.cc
+  scan_matching/real_time_correlative_scan_matcher_2d.cc
   mapping/grid_2d.cc
   frontend/local_slam_2d.cc
   application/slam_system.cc

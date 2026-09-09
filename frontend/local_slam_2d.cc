@@ -32,6 +32,8 @@ LocalSlam2D::LocalSlam2D(
     : options_(options),
       active_submaps_(options.submaps_options()),
       motion_filter_(options_.motion_filter_options()),
+      real_time_correlative_scan_matcher_(
+          options_.real_time_correlative_scan_matcher_options()),
       ceres_scan_matcher_(options_.ceres_scan_matcher_options()),
       expected_range_sensor_id_(std::move(expected_range_sensor_id)) {}
 
@@ -59,9 +61,15 @@ std::unique_ptr<transform::Rigid2d> LocalSlam2D::ScanMatch(
   }
   std::shared_ptr<const Submap2D> matching_submap =
       active_submaps_.submaps().front();
+  transform::Rigid2d initial_ceres_pose = pose_prediction;
+  if (options_.use_online_correlative_scan_matching()) {
+    real_time_correlative_scan_matcher_.Match(
+        pose_prediction, filtered_point_cloud, *matching_submap->grid(),
+        &initial_ceres_pose);
+  }
   auto pose_observation = absl::make_unique<transform::Rigid2d>();
   ceres::Solver::Summary summary;
-  ceres_scan_matcher_.Match(pose_prediction.translation(), pose_prediction,
+  ceres_scan_matcher_.Match(pose_prediction.translation(), initial_ceres_pose,
                             filtered_point_cloud,
                             *matching_submap->grid(), pose_observation.get(),
                             &summary);

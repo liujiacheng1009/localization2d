@@ -107,12 +107,22 @@ PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` �
 
 ### 前端 scan matching
 
+可选 `use_online_correlative_scan_matching`（默认 `false`）和
+`real_time_correlative_scan_matcher`。开启后，Ceres 之前先在预测位姿附近做穷举
+相关搜索，用来把 yaw 从里程计先验上拉开。窗口和偏离代价：
+
+- `linear_search_window` / `angular_search_window`：平移、旋转搜索半径；
+- `translation_delta_cost_weight` / `rotation_delta_cost_weight`：偏离预测的指数惩罚。
+
 前端 `ceres_scan_matcher`：
 
 - `occupied_space_weight`：scan 与概率栅格一致性；
 - `translation_weight`：偏离预测平移的代价；
 - `rotation_weight`：偏离预测 yaw 的代价；
 - solver 基线 20 次迭代、1 线程。
+
+相关搜索开启时，Ceres 的初值是相关匹配结果；平移先验仍指向里程计预测。先验过紧
+会把解拉回轮式里程计。
 
 ### `motion_filter`
 

@@ -23,6 +23,7 @@
 #include "cartographer/foundation/transform.h"
 #include "cartographer/mapping/submap_2d.h"
 #include "cartographer/scan_matching/ceres_scan_matcher_2d.h"
+#include "cartographer/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/frontend/motion_filter.h"
 #include "cartographer/frontend/pose_extrapolator.h"
 #include "cartographer/application/slam_options.h"
@@ -92,6 +93,8 @@ class LocalSlam2D {
   ActiveSubmaps2D active_submaps_;
 
   MotionFilter motion_filter_;
+  scan_matching::RealTimeCorrelativeScanMatcher2D
+      real_time_correlative_scan_matcher_;
   scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
 
   std::unique_ptr<PoseExtrapolator> extrapolator_;
