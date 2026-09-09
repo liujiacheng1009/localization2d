@@ -17,6 +17,7 @@
 #include "cartographer/frontend/local_slam_2d.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 
@@ -94,30 +95,30 @@ LocalSlam2D::AddRangeData(
 
   // TODO(gaschler): Check if this can strictly be 0.
   CHECK_LE(range_data.ranges.back().time, 0.f);
-  const common::Time time_first_point =
-      time + common::FromSeconds(range_data.ranges.front().time);
-  if (time_first_point < extrapolator_->GetLastPoseTime()) {
-    LOG(INFO) << "Extrapolator is still initializing.";
-    return nullptr;
+
+  // Destort the whole sweep into the last-beam tracking frame, then lift that
+  // rigid motion into the local frame with the predicted end pose. Motion comes
+  // from odometry over this sweep (constant-twist fallback), not from clamping
+  // early beams to the last SLAM pose.
+  const transform::Rigid2d pose_at_end = extrapolator_->ExtrapolatePose(time);
+  if (std::abs(range_data.ranges.front().time) > 1e-4) {
+    const transform::Rigid2d first_in_end = extrapolator_->TrackingMotion(
+        time + common::FromSeconds(range_data.ranges.front().time), time);
+    const double destort_yaw = transform::Yaw(first_in_end);
+    if (std::abs(destort_yaw) > 0.08) {
+      LOG(INFO) << "Scan destortion yaw=" << destort_yaw << " rad over "
+                << -range_data.ranges.front().time << " s";
+    }
   }
 
   std::vector<transform::Rigid3f> range_data_poses;
   range_data_poses.reserve(range_data.ranges.size());
-  bool warned = false;
   for (const auto& point : range_data.ranges) {
-    common::Time time_point = time + common::FromSeconds(point.time);
-    if (time_point < extrapolator_->GetLastExtrapolatedTime()) {
-      if (!warned) {
-        LOG(ERROR)
-            << "Timestamp of individual range data point jumps backwards from "
-            << extrapolator_->GetLastExtrapolatedTime() << " to " << time_point;
-        warned = true;
-      }
-      time_point = extrapolator_->GetLastExtrapolatedTime();
-    }
-    range_data_poses.push_back(
-        transform::Embed3D(
-            extrapolator_->ExtrapolatePose(time_point).cast<float>()));
+    const common::Time time_point = time + common::FromSeconds(point.time);
+    const transform::Rigid2d point_in_end =
+        extrapolator_->TrackingMotion(time_point, time);
+    range_data_poses.push_back(transform::Embed3D(
+        (pose_at_end * point_in_end).cast<float>()));
   }
 
   if (num_accumulated_ == 0) {
@@ -170,6 +171,13 @@ LocalSlam2D::AddAccumulatedRangeData(
     return nullptr;
   }
 
+  const common::Time last_pose_time = extrapolator_->GetLastPoseTime();
+  const double gap_seconds = common::ToSeconds(time - last_pose_time);
+  const double odom_interval_yaw = std::abs(
+      transform::Yaw(extrapolator_->TrackingMotion(time, last_pose_time)));
+  const bool gap_skip = has_range_pose_ &&
+                        options_.skip_insert_after_gap_seconds() > 0. &&
+                        gap_seconds > options_.skip_insert_after_gap_seconds();
   const transform::Rigid2d pose_prediction = extrapolator_->ExtrapolatePose(time);
 
   const sensor::PointCloud& filtered_point_cloud =
@@ -185,14 +193,30 @@ LocalSlam2D::AddAccumulatedRangeData(
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
+  const double matched_interval_yaw = std::abs(transform::Yaw(
+      extrapolator_->GetLastPose().inverse() * *pose_estimate_2d));
+  const double turning_limit = options_.skip_insert_while_turning_radians();
+  const bool turning_skip =
+      turning_limit > 0. &&
+      (odom_interval_yaw > turning_limit ||
+       matched_interval_yaw > turning_limit);
+  const bool skip_insert = gap_skip || turning_skip;
   extrapolator_->AddPose(time, *pose_estimate_2d);
+  has_range_pose_ = true;
 
   sensor::RangeData range_data_in_local =
       TransformRangeData(tracking_range_data,
                          transform::Embed3D(pose_estimate_2d->cast<float>()));
-  std::unique_ptr<InsertionResult> insertion_result = InsertIntoSubmap(
-      time, range_data_in_local, filtered_point_cloud,
-      *pose_estimate_2d);
+  std::unique_ptr<InsertionResult> insertion_result;
+  if (skip_insert) {
+    LOG(INFO) << "Skipping submap insert gap=" << gap_seconds
+              << "s odom_yaw=" << odom_interval_yaw
+              << " matched_yaw=" << matched_interval_yaw;
+  } else {
+    insertion_result = InsertIntoSubmap(
+        time, range_data_in_local, filtered_point_cloud,
+        *pose_estimate_2d);
+  }
 
   return absl::make_unique<MatchingResult>(
       MatchingResult{time, *pose_estimate_2d, std::move(range_data_in_local),
@@ -218,8 +242,7 @@ LocalSlam2D::InsertIntoSubmap(
 void LocalSlam2D::AddOdometryData(
     const sensor::OdometryData& odometry_data) {
   if (extrapolator_ == nullptr) {
-    // Until we've initialized the extrapolator we cannot add odometry data.
-    LOG(INFO) << "Extrapolator not yet initialized.";
+    pending_odometry_data_.push_back(odometry_data);
     return;
   }
   extrapolator_->AddOdometryData(odometry_data);
@@ -233,7 +256,14 @@ void LocalSlam2D::InitializeExtrapolator(const common::Time time) {
       ::cartographer::common::FromSeconds(options_.pose_extrapolator_options()
                                               .constant_velocity()
                                               .pose_queue_duration()));
-  extrapolator_->AddPose(time, transform::Rigid2d());
+  // Seed earlier than the first beam so motion-compensated LaserScan points
+  // (relative times < 0) are not dropped as "still initializing".
+  extrapolator_->AddPose(time - common::FromSeconds(0.25),
+                         transform::Rigid2d());
+  for (const auto& odometry_data : pending_odometry_data_) {
+    extrapolator_->AddOdometryData(odometry_data);
+  }
+  pending_odometry_data_.clear();
 }
 
 }  // namespace mapping

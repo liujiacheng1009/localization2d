@@ -199,6 +199,14 @@ LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
           parameter_dictionary->GetDictionary("ceres_scan_matcher").get());
   *options.mutable_motion_filter_options() = CreateMotionFilterOptions(
       parameter_dictionary->GetDictionary("motion_filter").get());
+  if (parameter_dictionary->HasKey("skip_insert_after_gap_seconds")) {
+    options.set_skip_insert_after_gap_seconds(
+        parameter_dictionary->GetDouble("skip_insert_after_gap_seconds"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_while_turning_radians")) {
+    options.set_skip_insert_while_turning_radians(
+        parameter_dictionary->GetDouble("skip_insert_while_turning_radians"));
+  }
   *options.mutable_pose_extrapolator_options() = CreatePoseExtrapolatorOptions(
       parameter_dictionary->GetDictionary("pose_extrapolator").get());
   *options.mutable_submaps_options() = CreateSubmapsOptions2D(

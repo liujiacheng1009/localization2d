@@ -17,6 +17,7 @@
 #ifndef CARTOGRAPHER_TRAJECTORY_LOCAL_SLAM_2D_H_
 #define CARTOGRAPHER_TRAJECTORY_LOCAL_SLAM_2D_H_
 
+#include <deque>
 #include <memory>
 #include <string>
 
@@ -98,6 +99,8 @@ class LocalSlam2D {
   scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
 
   std::unique_ptr<PoseExtrapolator> extrapolator_;
+  std::deque<sensor::OdometryData> pending_odometry_data_;
+  bool has_range_pose_ = false;
 
   int num_accumulated_ = 0;
   sensor::RangeData accumulated_range_data_;

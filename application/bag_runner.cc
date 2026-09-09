@@ -4,18 +4,29 @@
 #include <sys/resource.h>
 #include <time.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "cartographer/application/config.h"
+#include "cartographer/foundation/time.h"
 #include "cartographer/foundation/transform.h"
 #include "cartographer/foundation/transform.h"
 #include "cartographer/application/slam_system.h"
+#include "cartographer/frontend/frontend_2d.h"
+#include "cartographer/mapping/grid_2d.h"
+#include "cartographer/mapping/submap_2d.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "nav_msgs/msg/odometry.hpp"
@@ -32,6 +43,11 @@ DEFINE_string(offline_load_state_filename, "", "Frozen .swmap input");
 DEFINE_bool(offline_load_frozen_state, true, "Load map as frozen");
 DEFINE_string(offline_save_state_filename, "", ".swmap output");
 DEFINE_string(trajectory_filename, "", "Optimized trajectory CSV output");
+DEFINE_int32(debug_max_scan_count, -1,
+             "Process only the first N lidar scans for prefix debugging");
+DEFINE_string(debug_step_directory, "",
+              "If set, dump per-scan pose, hits, and occupancy after each "
+              "LocalSlam step");
 
 namespace {
 namespace carto = cartographer;
@@ -92,6 +108,9 @@ struct Calibration {
   std::string lidar_topic;
   std::string lidar_frame;
   double lidar_time_offset_seconds;
+  bool lidar_motion_compensation;
+  bool lidar_stamp_at_end;
+  double lidar_scan_period_seconds;
   carto::transform::Rigid2d tracking_from_lidar;
   std::string odometry_topic;
   std::string odometry_reference_frame;
@@ -133,6 +152,23 @@ Calibration LoadCalibration(const std::string& filename) {
            "T_reference_child");
   const double lidar_time_offset_seconds =
       lidar["time_offset_seconds"].as<double>();
+  const bool lidar_motion_compensation =
+      !lidar["motion_compensation"].IsDefined() ||
+      lidar["motion_compensation"].as<bool>();
+  const std::string lidar_stamp_convention =
+      lidar["stamp_convention"].IsDefined()
+          ? lidar["stamp_convention"].as<std::string>()
+          : "start";
+  CHECK(lidar_stamp_convention == "start" ||
+        lidar_stamp_convention == "end")
+      << "lidar.stamp_convention must be 'start' or 'end'";
+  const bool lidar_stamp_at_end = lidar_stamp_convention == "end";
+  const double lidar_scan_period_seconds =
+      lidar["scan_period_seconds"].IsDefined()
+          ? lidar["scan_period_seconds"].as<double>()
+          : 0.0;
+  CHECK(std::isfinite(lidar_scan_period_seconds) &&
+        lidar_scan_period_seconds >= 0.0);
   const double odometry_time_offset_seconds =
       odometry["time_offset_seconds"].as<double>();
   CHECK(std::isfinite(lidar_time_offset_seconds));
@@ -148,6 +184,9 @@ Calibration LoadCalibration(const std::string& filename) {
       lidar["topic"].as<std::string>(),
       NormalizeFrame(lidar["frame"].as<std::string>()),
       lidar_time_offset_seconds,
+      lidar_motion_compensation,
+      lidar_stamp_at_end,
+      lidar_scan_period_seconds,
       ReadPlanarTransform(lidar["T_tracking_sensor"], "T_tracking_sensor"),
       odometry["topic"].as<std::string>(),
       NormalizeFrame(odometry["reference_frame"].as<std::string>()),
@@ -156,27 +195,49 @@ Calibration LoadCalibration(const std::string& filename) {
       ReadPlanarTransform(odometry["T_tracking_child"], "T_tracking_child")};
 }
 
+bool CanMotionCompensate(const sensor_msgs::msg::LaserScan& scan,
+                         const Calibration& calibration) {
+  return calibration.lidar_motion_compensation &&
+         std::isfinite(scan.time_increment) && scan.time_increment > 1e-6 &&
+         scan.ranges.size() > 1;
+}
+
+bool IsUnusableLaserScan(const sensor_msgs::msg::LaserScan& scan,
+                         const Calibration& calibration) {
+  const double expected = calibration.lidar_scan_period_seconds;
+  if (expected <= 0. || !std::isfinite(scan.scan_time) || scan.scan_time <= 0.) {
+    return false;
+  }
+  // LD14-only: calibration.scan_period_seconds must be set. Gazebo omits it
+  // (expected == 0) so this never drops simulation scans.
+  return scan.scan_time > 1.5 * expected || scan.scan_time < 0.5 * expected;
+}
+
 carto::sensor::TimedPointCloudData ConvertScan(
     const sensor_msgs::msg::LaserScan& scan,
     const Calibration& calibration) {
   CHECK_EQ(NormalizeFrame(scan.header.frame_id), calibration.lidar_frame);
   carto::sensor::TimedPointCloud points;
   points.reserve(scan.ranges.size());
+  const bool use_motion_compensation = CanMotionCompensate(scan, calibration);
+  const float increment = use_motion_compensation ? scan.time_increment : 0.f;
   float angle = scan.angle_min;
   for (size_t i = 0; i < scan.ranges.size(); ++i, angle += scan.angle_increment) {
     const float range = scan.ranges[i];
     if (std::isfinite(range) && range >= scan.range_min &&
         range <= scan.range_max) {
       points.push_back({{range * std::cos(angle), range * std::sin(angle), 0.f},
-                        static_cast<float>(i) * scan.time_increment});
+                        static_cast<float>(i) * increment});
     }
   }
   auto time = FromRos(scan.header.stamp);
   time += carto::common::FromSeconds(calibration.lidar_time_offset_seconds);
-  if (!points.empty()) {
-    const float duration = points.back().time;
-    time += carto::common::FromSeconds(duration);
-    for (auto& point : points) point.time -= duration;
+  if (use_motion_compensation && !points.empty()) {
+    const float last_point_time = points.back().time;
+    for (auto& point : points) point.time -= last_point_time;
+    if (!calibration.lidar_stamp_at_end) {
+      time += carto::common::FromSeconds(last_point_time);
+    }
   }
   const auto sensor_to_tracking = carto::transform::Embed3D(
       calibration.tracking_from_lidar.cast<float>());
@@ -233,6 +294,151 @@ void WriteTrajectory(const std::string& filename, int trajectory_id,
   }
 }
 
+struct OccupancyDump {
+  bool empty = true;
+  int width = 0;
+  int height = 0;
+  double origin_x = 0.;
+  double origin_y = 0.;
+  double resolution = 0.05;
+  std::string filename;
+};
+
+struct DebugFrame {
+  double t = 0.;
+  double x = 0.;
+  double y = 0.;
+  double yaw = 0.;
+  bool inserted = false;
+  OccupancyDump map;
+  std::vector<Eigen::Vector2d> hits;
+};
+
+OccupancyDump WriteOccupancy(const std::string& directory, int index,
+                             carto::mapping::TrajectoryBackend2D* backend) {
+  double resolution = 0.03;
+  constexpr double padding = 0.25;
+  constexpr float kFree = 0.48f;
+  constexpr float kOccupied = 0.52f;
+
+  struct Cell {
+    Eigen::Vector2d local;
+    float probability;
+    carto::transform::Rigid2d global_from_local;
+  };
+  std::vector<Cell> cells;
+  Eigen::Vector2d minimum = Eigen::Vector2d::Constant(
+      std::numeric_limits<double>::infinity());
+  Eigen::Vector2d maximum = Eigen::Vector2d::Constant(
+      -std::numeric_limits<double>::infinity());
+
+  for (const auto& item : backend->GetAllSubmapData()) {
+    const auto submap =
+        std::dynamic_pointer_cast<const carto::mapping::Submap2D>(
+            item.data.submap);
+    if (!submap || submap->grid() == nullptr) continue;
+    const auto* grid = dynamic_cast<const carto::mapping::ProbabilityGrid*>(
+        submap->grid());
+    if (grid == nullptr) continue;
+    resolution = std::min(resolution, grid->limits().resolution());
+    const auto global_from_local =
+        item.data.pose * submap->local_pose().inverse();
+    for (const auto& xy : carto::mapping::XYIndexRangeIterator(
+             grid->limits().cell_limits())) {
+      if (!grid->IsKnown(xy)) continue;
+      const Eigen::Vector2d local =
+          grid->limits().GetCellCenter(xy).cast<double>();
+      const Eigen::Vector2d global = global_from_local * local;
+      minimum = minimum.cwiseMin(global);
+      maximum = maximum.cwiseMax(global);
+      cells.push_back({local, grid->GetProbability(xy), global_from_local});
+    }
+  }
+
+  OccupancyDump dump;
+  if (cells.empty() || !minimum.allFinite()) return dump;
+  minimum.array() -= padding;
+  maximum.array() += padding;
+  dump.width = std::max(
+      1, static_cast<int>(std::ceil((maximum.x() - minimum.x()) / resolution)));
+  dump.height = std::max(
+      1, static_cast<int>(std::ceil((maximum.y() - minimum.y()) / resolution)));
+  if (dump.width > 2000 || dump.height > 2000) {
+    LOG(WARNING) << "skipping oversized debug map " << dump.width << "x"
+                 << dump.height;
+    return dump;
+  }
+  dump.origin_x = minimum.x();
+  dump.origin_y = minimum.y();
+  dump.resolution = resolution;
+  dump.empty = false;
+  std::vector<uint8_t> pixels(
+      static_cast<size_t>(dump.width) * static_cast<size_t>(dump.height), 128);
+  for (const auto& cell : cells) {
+    const Eigen::Vector2d global = cell.global_from_local * cell.local;
+    const int x = carto::common::RoundToInt(
+        (global.x() - minimum.x()) / resolution);
+    const int y = carto::common::RoundToInt(
+        (global.y() - minimum.y()) / resolution);
+    if (x < 0 || y < 0 || x >= dump.width || y >= dump.height) continue;
+    uint8_t gray = 128;
+    if (cell.probability <= kFree) {
+      gray = 255;
+    } else if (cell.probability >= kOccupied) {
+      gray = 0;
+    } else {
+      continue;
+    }
+    pixels[(dump.height - 1 - y) * dump.width + x] = gray;
+  }
+  char name[64];
+  std::snprintf(name, sizeof(name), "maps/%06d.pgm", index);
+  dump.filename = name;
+  const std::string path = directory + "/" + dump.filename;
+  std::ofstream out(path, std::ios::binary);
+  CHECK(out) << "Cannot write occupancy '" << path << "'.";
+  out << "P5\n" << dump.width << " " << dump.height << "\n255\n";
+  out.write(reinterpret_cast<const char*>(pixels.data()),
+            static_cast<std::streamsize>(pixels.size()));
+  CHECK(out) << "Failed writing occupancy '" << path << "'.";
+  return dump;
+}
+
+void WriteDebugFrames(const std::string& directory,
+                      const std::vector<DebugFrame>& frames) {
+  if (directory.empty()) return;
+  const std::string path = directory + "/frames.json";
+  std::ofstream out(path);
+  CHECK(out) << "Cannot write debug frames '" << path << "'.";
+  out << std::fixed << "{\"frames\":[\n";
+  for (size_t i = 0; i < frames.size(); ++i) {
+    const auto& frame = frames[i];
+    out << " {\"t\":" << std::setprecision(6) << frame.t
+        << ",\"x\":" << std::setprecision(4) << frame.x
+        << ",\"y\":" << frame.y
+        << ",\"yaw\":" << frame.yaw
+        << ",\"inserted\":" << (frame.inserted ? "true" : "false")
+        << ",\"map\":\"" << frame.map.filename << "\""
+        << ",\"origin_x\":" << frame.map.origin_x
+        << ",\"origin_y\":" << frame.map.origin_y
+        << ",\"resolution\":" << frame.map.resolution
+        << ",\"width\":" << frame.map.width
+        << ",\"height\":" << frame.map.height
+        << ",\"hits\":[";
+    for (size_t j = 0; j < frame.hits.size(); ++j) {
+      if (j != 0) out << ",";
+      out << "[" << std::setprecision(3) << frame.hits[j].x() << ","
+          << frame.hits[j].y() << "]";
+    }
+    out << "]}";
+    if (i + 1 < frames.size()) out << ",";
+    out << "\n";
+  }
+  out << "]}\n";
+  CHECK(out);
+  LOG(INFO) << "Wrote " << frames.size() << " debug steps to " << directory;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -254,8 +460,9 @@ int main(int argc, char** argv) {
       NormalizeFrame(dictionary->GetString("tracking_frame"));
   const Calibration calibration = LoadCalibration(FLAGS_calibration_filename);
   CHECK_EQ(calibration.tracking_frame, tracking_frame);
-  CHECK_EQ(calibration.lidar_topic, "/scan");
-  CHECK_EQ(calibration.odometry_topic, "/odom");
+  CHECK(!calibration.lidar_topic.empty());
+  CHECK(!calibration.odometry_topic.empty());
+  CHECK_NE(calibration.lidar_topic, calibration.odometry_topic);
   const auto map_options = carto::mapping::CreateSlamSystemOptions(
       dictionary->GetDictionary("map_builder").get());
   const auto trajectory_options = carto::mapping::CreateTrajectoryBuilderOptions(
@@ -272,8 +479,46 @@ int main(int argc, char** argv) {
        "scan"},
       {carto::mapping::SlamSystem::SensorId::SensorType::ODOMETRY,
        "odom"}};
+  std::vector<DebugFrame> debug_frames;
+  OccupancyDump last_map;
+  carto::mapping::SlamSystem::LocalSlamResultCallback debug_callback;
+  if (!FLAGS_debug_step_directory.empty()) {
+    std::filesystem::create_directories(
+        std::filesystem::path(FLAGS_debug_step_directory) / "maps");
+    debug_callback =
+        [&](int trajectory_id, carto::common::Time time,
+            carto::transform::Rigid2d local_pose,
+            carto::sensor::RangeData range_data,
+            std::unique_ptr<const carto::mapping::Frontend2D::InsertionResult>
+                insertion) {
+          const auto global_from_local =
+              map_builder->backend()->GetLocalToGlobalTransform(trajectory_id);
+          const auto pose = global_from_local * local_pose;
+          DebugFrame frame;
+          frame.t = ToUnixSeconds(time);
+          frame.x = pose.translation().x();
+          frame.y = pose.translation().y();
+          frame.yaw = carto::transform::Yaw(pose);
+          frame.inserted = insertion != nullptr;
+          if (frame.inserted) {
+            last_map = WriteOccupancy(FLAGS_debug_step_directory,
+                                      static_cast<int>(debug_frames.size()),
+                                      map_builder->backend());
+          }
+          frame.map = last_map;
+          const auto& points = range_data.returns.points();
+          const int stride =
+              std::max(1, static_cast<int>(points.size()) / 120);
+          for (size_t i = 0; i < points.size(); i += static_cast<size_t>(stride)) {
+            const Eigen::Vector2d local(points[i].position.x(),
+                                        points[i].position.y());
+            frame.hits.push_back(global_from_local * local);
+          }
+          debug_frames.push_back(std::move(frame));
+        };
+  }
   const int trajectory_id = map_builder->AddTrajectoryBuilder(
-      sensors, trajectory_options, nullptr);
+      sensors, trajectory_options, debug_callback);
   LOG(INFO) << "Added trajectory with ID '" << trajectory_id << "'";
 
   const auto started = std::chrono::steady_clock::now();
@@ -281,19 +526,85 @@ int main(int argc, char** argv) {
   reader.open(FLAGS_bag_filenames);
   const auto types = TopicTypes(&reader);
   auto* trajectory = map_builder->GetTrajectoryBuilder(trajectory_id);
+  struct QueuedMessage {
+    int64_t stamp;
+    rosbag2_storage::SerializedBagMessageSharedPtr message;
+  };
+  std::vector<QueuedMessage> queued;
   while (reader.has_next()) {
     const auto message = reader.read_next();
     if (message->topic_name == calibration.lidar_topic) {
-      CHECK_EQ(types.at("/scan"), "sensor_msgs/msg/LaserScan");
-      trajectory->AddSensorData(
-          "scan", ConvertScan(Deserialize<sensor_msgs::msg::LaserScan>(*message),
-                              calibration));
+      CHECK_EQ(types.at(calibration.lidar_topic), "sensor_msgs/msg/LaserScan");
+      const auto scan = Deserialize<sensor_msgs::msg::LaserScan>(*message);
+      // Use the exact same conversion (including invalid-range filtering and
+      // float rounding) as the dispatch path when repairing message order.
+      queued.push_back({carto::common::ToUniversal(ConvertScan(scan, calibration).time),
+                        message});
     } else if (message->topic_name == calibration.odometry_topic) {
-      CHECK_EQ(types.at("/odom"), "nav_msgs/msg/Odometry");
-      trajectory->AddSensorData(
-          "odom", ConvertOdometry(Deserialize<nav_msgs::msg::Odometry>(*message),
-                                  calibration));
+      CHECK_EQ(types.at(calibration.odometry_topic), "nav_msgs/msg/Odometry");
+      const auto odometry = Deserialize<nav_msgs::msg::Odometry>(*message);
+      queued.push_back({carto::common::ToUniversal(
+                            FromRos(odometry.header.stamp) +
+                            carto::common::FromSeconds(
+                                calibration.odometry_time_offset_seconds)),
+                        message});
     }
+  }
+  std::stable_sort(queued.begin(), queued.end(),
+                   [](const QueuedMessage& left, const QueuedMessage& right) {
+                     return left.stamp < right.stamp;
+                   });
+  if (FLAGS_debug_max_scan_count >= 0) {
+    int scan_count = 0;
+    int64_t cutoff = std::numeric_limits<int64_t>::max();
+    for (const auto& item : queued) {
+      if (item.message->topic_name == calibration.lidar_topic) {
+        ++scan_count;
+        if (scan_count == FLAGS_debug_max_scan_count) {
+          cutoff = item.stamp;
+          break;
+        }
+      }
+    }
+    if (FLAGS_debug_max_scan_count == 0) cutoff = std::numeric_limits<int64_t>::min();
+    std::vector<QueuedMessage> prefix;
+    int kept_scans = 0;
+    for (const auto& item : queued) {
+      if (item.stamp > cutoff) continue;
+      if (item.message->topic_name == calibration.lidar_topic &&
+          ++kept_scans > FLAGS_debug_max_scan_count) continue;
+      prefix.push_back(item);
+    }
+    queued.swap(prefix);
+  }
+  int dropped_abnormal_scans = 0;
+  int motion_compensated_scans = 0;
+  int64_t last_scan_stamp = std::numeric_limits<int64_t>::min();
+  for (const auto& item : queued) {
+    if (item.message->topic_name == calibration.lidar_topic) {
+      const auto scan =
+          Deserialize<sensor_msgs::msg::LaserScan>(*item.message);
+      if (IsUnusableLaserScan(scan, calibration) ||
+          item.stamp <= last_scan_stamp) {
+        ++dropped_abnormal_scans;
+        continue;
+      }
+      last_scan_stamp = item.stamp;
+      if (CanMotionCompensate(scan, calibration)) ++motion_compensated_scans;
+      trajectory->AddSensorData("scan", ConvertScan(scan, calibration));
+    } else {
+      const auto converted = ConvertOdometry(
+          Deserialize<nav_msgs::msg::Odometry>(*item.message), calibration);
+      trajectory->AddSensorData("odom", converted);
+    }
+  }
+  if (dropped_abnormal_scans > 0) {
+    LOG(WARNING) << "Dropped " << dropped_abnormal_scans
+                 << " unusable or out-of-order lidar scans";
+  }
+  if (calibration.lidar_motion_compensation) {
+    LOG(INFO) << "Motion-compensated " << motion_compensated_scans
+              << " lidar scans using LaserScan.time_increment";
   }
   map_builder->FinishTrajectory(trajectory_id);
   map_builder->backend()->RunFinalOptimization();
@@ -309,6 +620,7 @@ int main(int argc, char** argv) {
   LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
   WriteTrajectory(FLAGS_trajectory_filename, trajectory_id,
                   map_builder->backend());
+  WriteDebugFrames(FLAGS_debug_step_directory, debug_frames);
   if (!FLAGS_offline_save_state_filename.empty()) {
     CHECK(map_builder->SerializeStateToFile(
         true, FLAGS_offline_save_state_filename));

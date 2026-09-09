@@ -26,11 +26,19 @@ class PoseExtrapolator {
   PoseExtrapolator& operator=(const PoseExtrapolator&) = delete;
 
   common::Time GetLastPoseTime() const;
+  transform::Rigid2d GetLastPose() const;
   common::Time GetLastExtrapolatedTime() const;
 
   void AddPose(common::Time time, const transform::Rigid2d& pose);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
   transform::Rigid2d ExtrapolatePose(common::Time time);
+
+  // Pose of the tracking frame at `time`, expressed in the tracking frame at
+  // `reference_time`. Uses odometry interpolation over the sweep when possible,
+  // otherwise a constant body-frame twist. Does not depend on the last SLAM
+  // pose, so early beams in a LaserScan can still be destorted.
+  transform::Rigid2d TrackingMotion(common::Time time,
+                                    common::Time reference_time) const;
 
  private:
   struct TimedPose {
@@ -40,6 +48,9 @@ class PoseExtrapolator {
 
   void UpdateVelocitiesFromPoses();
   void TrimOdometryData();
+  bool InterpolateOdometry(common::Time time, transform::Rigid2d* pose) const;
+  void CurrentBodyTwist(Eigen::Vector2d* linear_velocity_in_tracking,
+                        double* angular_velocity) const;
 
   const common::Duration pose_queue_duration_;
   std::deque<TimedPose> timed_pose_queue_;

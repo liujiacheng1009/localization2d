@@ -139,6 +139,8 @@ struct LocalTrajectoryBuilderOptions2D {
   CARTOGRAPHER_OPTION_FIELD(CeresScanMatcherOptions2D,
                             ceres_scan_matcher_options)
   CARTOGRAPHER_OPTION_FIELD(MotionFilterOptions, motion_filter_options)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_after_gap_seconds)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_while_turning_radians)
   CARTOGRAPHER_OPTION_FIELD(PoseExtrapolatorOptions,
                             pose_extrapolator_options)
   CARTOGRAPHER_OPTION_FIELD(SubmapsOptions2D, submaps_options)
