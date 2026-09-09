@@ -47,6 +47,28 @@ docker compose build cartographer
 [入门教程](doc/GETTING_STARTED.md)。本机构建需要预先安装 ROS 2 Humble、Ceres、Eigen、
 Sophus 1.22.10、Abseil、gflags、glog、yaml-cpp、SQLite3 和 Zlib。
 
+SweepNav 还提供了针对本地记录包的可视化测试入口：
+
+```bash
+# 测试一个 record 包；结果在 artifacts/record-localization2d/<时间>/01/
+.venv/bin/python tools/run_record_localization2d.py 01 --rebuild
+
+# 测试全部四个 record 包
+.venv/bin/python tools/run_record_localization2d.py all
+
+# 同一个入口也兼容 exploration 风格的 /scan、/odom 数据包
+# 默认按数据集目录选择 YAML：record → record_offline.yaml（含 LD14 旋转不写入），
+# exploration → exploration_offline.yaml（不含 skip_insert_*）
+.venv/bin/python tools/run_record_localization2d.py apartment-0 \
+  --dataset-root datasets/exploration
+```
+
+topic 名称从数据包旁的 `calibration.yaml` 读取，因此 `record` 的
+`/sensor/lidar2d/scan`、`/sensor/odometry/odom` 与 `exploration` 的 `/scan`、`/odom`
+无需改包即可共用 runner。测试会读取记录包中的 `/tf_static`（若存在）核验预先写入的
+二维雷达外参，并输出 `map.swmap`、`trajectory.csv`、`map_with_trajectories.png` 和
+`summary.json`；图中红线是 Localization2D，蓝线是起点对齐后的 odometry。
+
 ## 文档与验证
 
 - [文档首页](doc/README.md)：按使用、算法开发和维护三条路径组织。

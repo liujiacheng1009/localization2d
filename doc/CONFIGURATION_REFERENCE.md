@@ -129,6 +129,18 @@ PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` �
 只有时间、距离、角度三个变化都低于门限时才丢弃 node。基线是 5 秒、0.06 米、3 度。
 门限增大可减少 node 和后端负载，但会降低 submap 约束密度。
 
+### `skip_insert_*`（仅真机 LD14）
+
+这两个字段默认 `0`（未写出即关闭）。只应出现在 `config/record_offline.yaml`：
+
+| 参数 | record 值 | 说明 |
+|---|---:|---|
+| `skip_insert_after_gap_seconds` | 0.25 | 相邻有效雷达间隔超过该值时仍匹配，但不写入占据栅格 |
+| `skip_insert_while_turning_radians` | 0.06 | 本圈轮速或匹配转角超过该值时不写入 |
+
+仿真 / `datasets/exploration` / `iilabs3d_offline.yaml` 不得填写。Gazebo 的
+`time_increment == 0`，旋转去畸变不会启用；跳过写入会让探索原地转丢图。
+
 ### `pose_extrapolator.constant_velocity`
 
 | 参数 | 基线 | 当前含义 |

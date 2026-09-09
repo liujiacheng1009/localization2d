@@ -1,0 +1,94 @@
+# Offline mapping for Gazebo datasets/exploration.
+# Do not copy LD14 insert-skip keys here: simulation scans are instantaneous
+# (time_increment == 0) and rotation destortion is not applied.
+map_builder:
+  use_trajectory_builder_2d: true
+  collate_by_trajectory: false
+  pose_graph:
+    optimize_every_n_nodes: 20
+    constraint_builder:
+      sampling_ratio: 0.15
+      max_constraint_distance: 12.0
+      min_score: 0.65
+      global_localization_min_score: 0.7
+      loop_closure_translation_weight: 11000.0
+      loop_closure_rotation_weight: 100000.0
+      log_matches: true
+      fast_correlative_scan_matcher:
+        linear_search_window: 7.0
+        angular_search_window: 0.5235987755982988
+        branch_and_bound_depth: 7
+      ceres_scan_matcher:
+        occupied_space_weight: 20.0
+        translation_weight: 10.0
+        rotation_weight: 1.0
+        ceres_solver_options:
+          use_nonmonotonic_steps: true
+          max_num_iterations: 10
+          num_threads: 1
+    matcher_translation_weight: 500.0
+    matcher_rotation_weight: 1600.0
+    optimization_problem:
+      huber_scale: 10.0
+      local_slam_pose_translation_weight: 100000.0
+      local_slam_pose_rotation_weight: 100000.0
+      odometry_translation_weight: 100.0
+      odometry_rotation_weight: 10.0
+      log_solver_summary: false
+      ceres_solver_options:
+        use_nonmonotonic_steps: false
+        max_num_iterations: 50
+        num_threads: 4
+    max_num_final_iterations: 100
+    global_sampling_ratio: 0.003
+    log_residual_histograms: true
+trajectory_builder:
+  trajectory_builder_2d:
+    min_range: 0.05
+    max_range: 12.0
+    min_z: -0.2
+    max_z: 0.5
+    missing_data_ray_length: 12.0
+    num_accumulated_range_data: 1
+    voxel_filter_size: 0.025
+    adaptive_voxel_filter:
+      max_length: 0.3
+      min_num_points: 120
+      max_range: 12.0
+    loop_closure_adaptive_voxel_filter:
+      max_length: 0.5
+      min_num_points: 80
+      max_range: 12.0
+    use_online_correlative_scan_matching: true
+    real_time_correlative_scan_matcher:
+      linear_search_window: 0.15
+      angular_search_window: 0.5235987755982988
+      translation_delta_cost_weight: 0.1
+      rotation_delta_cost_weight: 0.1
+    ceres_scan_matcher:
+      occupied_space_weight: 10.0
+      translation_weight: 10.0
+      rotation_weight: 40.0
+      ceres_solver_options:
+        use_nonmonotonic_steps: false
+        max_num_iterations: 20
+        num_threads: 1
+    motion_filter:
+      max_time_seconds: 1.0
+      max_distance_meters: 0.05
+      max_angle_radians: 0.035
+    pose_extrapolator:
+      constant_velocity:
+        pose_queue_duration: 0.001
+    submaps:
+      num_range_data: 35
+      grid_options_2d:
+        grid_type: PROBABILITY_GRID
+        resolution: 0.03
+      range_data_inserter:
+        range_data_inserter_type: PROBABILITY_GRID_INSERTER_2D
+        probability_grid_range_data_inserter:
+          insert_free_space: true
+          hit_probability: 0.55
+          miss_probability: 0.49
+tracking_frame: base_link
