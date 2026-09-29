@@ -85,10 +85,28 @@ std::vector<SubmapId> TrajectoryBackend2D::InitializeGlobalSubmapPoses(
                                         trajectory_id) *
               insertion_submaps[0]->local_pose());
     }
-    CHECK_EQ(1, submap_data.SizeOfTrajectoryOrZero(trajectory_id));
-    const SubmapId submap_id{trajectory_id, 0};
-    CHECK(data_.submap_data.at(submap_id).submap == insertion_submaps.front());
-    return {submap_id};
+    if (submap_data.SizeOfTrajectoryOrZero(trajectory_id) == 1) {
+      const SubmapId submap_id{trajectory_id, 0};
+      CHECK(data_.submap_data.at(submap_id).submap ==
+            insertion_submaps.front());
+      return {submap_id};
+    }
+    // Relocalization replaced the active pair with one new submap. AppendNode
+    // has already stored it; the optimization problem still ends at the
+    // previous submap.
+    const auto end_it = submap_data.EndOfTrajectory(trajectory_id);
+    CHECK(submap_data.BeginOfTrajectory(trajectory_id) != end_it);
+    const SubmapId last_submap_id = std::prev(end_it)->id;
+    if (data_.submap_data.at(last_submap_id).submap ==
+        insertion_submaps.front()) {
+      return {last_submap_id};
+    }
+    optimization_problem_->AddSubmap(
+        trajectory_id,
+        ComputeLocalToGlobalTransform(data_.global_submap_poses_2d,
+                                      trajectory_id) *
+            insertion_submaps.front()->local_pose());
+    return {SubmapId{trajectory_id, last_submap_id.submap_index + 1}};
   }
   CHECK_EQ(2, insertion_submaps.size());
   const auto end_it = submap_data.EndOfTrajectory(trajectory_id);

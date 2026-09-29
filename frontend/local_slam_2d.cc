@@ -193,6 +193,29 @@ LocalSlam2D::AddAccumulatedRangeData(
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
+  // A carried robot keeps the wheels still. The 0.15 m local window then
+  // walks toward whichever wall fragment scores least badly, and each step
+  // is inserted. Hold the last pose and leave the submap unchanged.
+  if (has_range_pose_) {
+    const transform::Rigid2d from_last =
+        extrapolator_->GetLastPose().inverse() * pose_prediction;
+    const transform::Rigid2d from_prediction =
+        pose_prediction.inverse() * *pose_estimate_2d;
+    const bool odom_still =
+        from_last.translation().norm() < 0.05 &&
+        std::abs(transform::Yaw(from_last)) < 0.08;
+    const bool walked = from_prediction.translation().norm() > 0.12;
+    if (odom_still && walked) {
+      const transform::Rigid2d held = extrapolator_->GetLastPose();
+      sensor::RangeData held_range = TransformRangeData(
+          tracking_range_data, transform::Embed3D(held.cast<float>()));
+      MatchingResult result{time, held, std::move(held_range), nullptr};
+      result.tracking_lost = true;
+      result.lost_cloud = filtered_point_cloud;
+      result.tracking_range_data = tracking_range_data;
+      return absl::make_unique<MatchingResult>(std::move(result));
+    }
+  }
   const double matched_interval_yaw = std::abs(transform::Yaw(
       extrapolator_->GetLastPose().inverse() * *pose_estimate_2d));
   const double turning_limit = options_.skip_insert_while_turning_radians();
@@ -237,6 +260,23 @@ LocalSlam2D::InsertIntoSubmap(
       std::make_shared<const TrajectoryNode::Data>(TrajectoryNode::Data{
           time, filtered_point_cloud, pose_estimate}),
       std::move(insertion_submaps)});
+}
+
+std::unique_ptr<LocalSlam2D::InsertionResult>
+LocalSlam2D::CommitRelocalizedPose(
+    const common::Time time, const transform::Rigid2d& local_pose,
+    const sensor::RangeData& tracking_range_data) {
+  CHECK(extrapolator_ != nullptr);
+  extrapolator_->AddPose(time, local_pose);
+  has_range_pose_ = true;
+  active_submaps_.ReplaceWithNewOrigin(local_pose.translation().cast<float>());
+  const sensor::PointCloud filtered = sensor::AdaptiveVoxelFilter(
+      tracking_range_data.returns, options_.adaptive_voxel_filter_options());
+  const sensor::RangeData range_data_in_local = TransformRangeData(
+      tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
+  LOG(INFO) << "Relocalized local pose to (" << local_pose.translation().x()
+            << ", " << local_pose.translation().y() << ")";
+  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose);
 }
 
 void LocalSlam2D::AddOdometryData(

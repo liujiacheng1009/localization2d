@@ -3,13 +3,212 @@
 
 #include "cartographer/backend/trajectory_backend_2d.h"
 
+#include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <memory>
+#include <vector>
 
 #include "cartographer/foundation/utils.h"
 #include "cartographer/foundation/transform.h"
+#include "cartographer/mapping/submap_2d.h"
+#include "cartographer/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "glog/logging.h"
 
 namespace cartographer {
 namespace mapping {
+namespace {
+
+constexpr float kRelocalizationResolution = 0.05f;
+constexpr float kOccupiedProbability = 0.9f;
+constexpr float kFreeProbability = 0.1f;
+constexpr float kSearchFloor = 0.45f;
+constexpr float kMinAcceptScore = 0.68f;
+constexpr float kMinScoreMargin = 0.10f;
+constexpr double kMinJumpMeters = 0.8;
+constexpr double kDistinctHypothesisMeters = 1.0;
+constexpr float kSuppressRadius = 0.55f;
+constexpr float kMinPointRange = 0.15f;
+constexpr float kMaxPointRange = 11.8f;
+
+struct RelocalizationSample {
+  Eigen::Vector2f center;
+  bool occupied = false;
+};
+
+void PaintIfUnknown(ProbabilityGrid* grid, const MapLimits& limits,
+                    const Eigen::Array2i& cell, float probability) {
+  if (!limits.Contains(cell) || grid->IsKnown(cell)) return;
+  grid->SetProbability(cell, probability);
+}
+
+std::unique_ptr<ProbabilityGrid> BuildRelocalizationGrid(
+    const std::vector<RelocalizationSample>& samples,
+    const std::vector<Eigen::Vector2f>* suppressed_hits,
+    ValueConversionTables* conversion_tables) {
+  bool any = false;
+  Eigen::Vector2f min_p = Eigen::Vector2f::Zero();
+  Eigen::Vector2f max_p = Eigen::Vector2f::Zero();
+  const float suppress_sq = kSuppressRadius * kSuppressRadius;
+  auto kept = [&](const Eigen::Vector2f& center) {
+    if (suppressed_hits == nullptr) return true;
+    for (const Eigen::Vector2f& hit : *suppressed_hits) {
+      if ((center - hit).squaredNorm() <= suppress_sq) return false;
+    }
+    return true;
+  };
+  for (const RelocalizationSample& sample : samples) {
+    if (!kept(sample.center)) continue;
+    if (!any) {
+      min_p = max_p = sample.center;
+      any = true;
+    } else {
+      min_p = min_p.cwiseMin(sample.center);
+      max_p = max_p.cwiseMax(sample.center);
+    }
+  }
+  if (!any) return nullptr;
+  min_p.array() -= 1.f;
+  max_p.array() += 1.f;
+  if ((max_p - min_p).maxCoeff() > 80.f) return nullptr;
+  const int cells_along_x = std::max(
+      1, static_cast<int>(std::ceil((max_p.x() - min_p.x()) /
+                                   kRelocalizationResolution)));
+  const int cells_along_y = std::max(
+      1, static_cast<int>(std::ceil((max_p.y() - min_p.y()) /
+                                   kRelocalizationResolution)));
+  const MapLimits limits(
+      kRelocalizationResolution,
+      Eigen::Vector2d(min_p.x() + cells_along_x * kRelocalizationResolution,
+                      min_p.y() + cells_along_y * kRelocalizationResolution),
+      CellLimits(cells_along_y, cells_along_x));
+  auto grid = std::make_unique<ProbabilityGrid>(limits, conversion_tables);
+  for (const RelocalizationSample& sample : samples) {
+    if (!sample.occupied || !kept(sample.center)) continue;
+    const Eigen::Array2i cell = limits.GetCellIndex(sample.center);
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        PaintIfUnknown(grid.get(), limits,
+                       Eigen::Array2i(cell.x() + dx, cell.y() + dy),
+                       kOccupiedProbability);
+      }
+    }
+  }
+  for (const RelocalizationSample& sample : samples) {
+    if (sample.occupied || !kept(sample.center)) continue;
+    PaintIfUnknown(grid.get(), limits, limits.GetCellIndex(sample.center),
+                   kFreeProbability);
+  }
+  if (grid->known_cells_box_for_serialization().isEmpty()) return nullptr;
+  return grid;
+}
+
+struct RelocalizationHit {
+  bool found = false;
+  float score = 0.f;
+  transform::Rigid2d pose = transform::Rigid2d();
+};
+
+RelocalizationHit MatchMergedGrid(
+    const ProbabilityGrid& grid, const sensor::PointCloud& cloud,
+    const FastCorrelativeScanMatcherOptions2D& options) {
+  scan_matching::FastCorrelativeScanMatcher2D matcher(grid, options);
+  RelocalizationHit hit;
+  hit.found = matcher.MatchFullSubmap(cloud, kSearchFloor, &hit.score, &hit.pose);
+  return hit;
+}
+
+}  // namespace
+
+std::optional<transform::Rigid2d> TrajectoryBackend2D::Relocalize(
+    const sensor::PointCloud& cloud,
+    const transform::Rigid2d& current_local) const {
+  const sensor::PointCloud usable = cloud.copy_if([](const sensor::RangefinderPoint& point) {
+    const float range = point.position.head<2>().norm();
+    return range >= kMinPointRange && range <= kMaxPointRange;
+  });
+  if (usable.size() < 30) return std::nullopt;
+  std::vector<RelocalizationSample> samples;
+  {
+    absl::MutexLock locker(&mutex_);
+    for (const auto& submap_id_data : data_.submap_data) {
+      auto submap = std::dynamic_pointer_cast<const Submap2D>(
+          submap_id_data.data.submap);
+      if (!submap || submap->grid() == nullptr) continue;
+      if (submap->num_range_data() < 8) continue;
+      const auto* probability_grid =
+          dynamic_cast<const ProbabilityGrid*>(submap->grid());
+      if (probability_grid == nullptr) continue;
+      const Grid2D& grid = *probability_grid;
+      const Eigen::AlignedBox2i& box = grid.known_cells_box_for_serialization();
+      if (box.isEmpty()) continue;
+      for (int ix = box.min().x(); ix <= box.max().x(); ++ix) {
+        for (int iy = box.min().y(); iy <= box.max().y(); ++iy) {
+          const Eigen::Array2i cell(ix, iy);
+          if (!grid.IsKnown(cell)) continue;
+          const float probability = probability_grid->GetProbability(cell);
+          if (probability >= 0.52f) {
+            samples.push_back(
+                RelocalizationSample{grid.limits().GetCellCenter(cell), true});
+          } else if (probability <= 0.48f) {
+            samples.push_back(
+                RelocalizationSample{grid.limits().GetCellCenter(cell), false});
+          }
+        }
+      }
+    }
+  }
+  if (samples.empty()) return std::nullopt;
+  ValueConversionTables conversion_tables;
+  const auto merged =
+      BuildRelocalizationGrid(samples, nullptr, &conversion_tables);
+  if (merged == nullptr) return std::nullopt;
+  const auto& matcher_options = options_.constraint_builder_options()
+                                    .fast_correlative_scan_matcher_options();
+  const RelocalizationHit best = MatchMergedGrid(*merged, usable, matcher_options);
+  if (!best.found || best.score < kMinAcceptScore) {
+    LOG(INFO) << "Relocalization rejected, best score "
+              << (best.found ? best.score : 0.f);
+    return std::nullopt;
+  }
+  std::vector<Eigen::Vector2f> hits;
+  hits.reserve(usable.size());
+  for (const sensor::RangefinderPoint& point : usable) {
+    hits.push_back(
+        (best.pose * point.position.head<2>().cast<double>()).cast<float>());
+  }
+  const auto suppressed =
+      BuildRelocalizationGrid(samples, &hits, &conversion_tables);
+  float second_score = 0.f;
+  bool distinct = false;
+  if (suppressed != nullptr) {
+    const RelocalizationHit second =
+        MatchMergedGrid(*suppressed, usable, matcher_options);
+    if (second.found) {
+      second_score = second.score;
+      distinct = (second.pose.translation() - best.pose.translation()).norm() >=
+                 kDistinctHypothesisMeters;
+    }
+  }
+  const float margin = distinct ? best.score - second_score : best.score;
+  if (distinct && margin < kMinScoreMargin) {
+    LOG(INFO) << "Relocalization rejected, score " << best.score
+              << " second " << second_score << " at ("
+              << best.pose.translation().x() << ", "
+              << best.pose.translation().y() << ")";
+    return std::nullopt;
+  }
+  if ((best.pose.translation() - current_local.translation()).norm() <
+      kMinJumpMeters) {
+    LOG(INFO) << "Relocalization stays, match is already near the held pose";
+    return std::nullopt;
+  }
+  LOG(INFO) << "Relocalization score " << best.score << " second " << second_score
+            << " at (" << best.pose.translation().x() << ", "
+            << best.pose.translation().y() << ") yaw "
+            << transform::Yaw(best.pose);
+  return best.pose;
+}
 
 MapById<NodeId, TrajectoryNode> TrajectoryBackend2D::GetTrajectoryNodes() const {
   absl::MutexLock locker(&mutex_);

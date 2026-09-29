@@ -22,6 +22,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -102,6 +103,13 @@ class TrajectoryBackend2D {
   SubmapData GetSubmapData(const SubmapId& submap_id) const
       LOCKS_EXCLUDED(mutex_);
   MapById<SubmapId, SubmapData> GetAllSubmapData() const
+      LOCKS_EXCLUDED(mutex_);
+  // Full-map branch-and-bound relocalization for a carried robot. Returns a
+  // local-frame pose only when the best hypothesis is well above the next
+  // distinct place and far from 'current_local'.
+  std::optional<transform::Rigid2d> Relocalize(
+      const sensor::PointCloud& cloud,
+      const transform::Rigid2d& current_local) const
       LOCKS_EXCLUDED(mutex_);
   MapById<SubmapId, SubmapPose> GetAllSubmapPoses() const
       LOCKS_EXCLUDED(mutex_);

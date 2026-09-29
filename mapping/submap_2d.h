@@ -132,6 +132,9 @@ class ActiveSubmaps2D {
       const sensor::RangeData& range_data);
 
   std::vector<std::shared_ptr<const Submap2D>> submaps() const;
+  // Drop the active pair and start one empty submap at 'origin'. The previous
+  // grids stay alive through the backend and are not written again.
+  void ReplaceWithNewOrigin(const Eigen::Vector2f& origin);
 
  private:
   std::unique_ptr<ProbabilityGrid> CreateGrid(const Eigen::Vector2f& origin);

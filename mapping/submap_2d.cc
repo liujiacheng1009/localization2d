@@ -401,6 +401,11 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::submaps() const {
                                                       submaps_.end());
 }
 
+void ActiveSubmaps2D::ReplaceWithNewOrigin(const Eigen::Vector2f& origin) {
+  submaps_.clear();
+  AddSubmap(origin);
+}
+
 std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
     const sensor::RangeData& range_data) {
   if (submaps_.empty() ||

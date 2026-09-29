@@ -3,6 +3,7 @@
 
 #include "cartographer/frontend/frontend_2d.h"
 
+#include <cmath>
 #include <utility>
 
 #include "absl/container/flat_hash_set.h"
@@ -66,21 +67,79 @@ void Frontend2D::ProcessSensorData(
   auto matching_result = local_slam_->AddRangeData(sensor_id, data);
   if (matching_result == nullptr) return;
 
+  transform::Rigid2d published_pose = matching_result->local_pose;
   std::unique_ptr<InsertionResult> insertion_result;
-  if (matching_result->insertion_result != nullptr) {
-    const NodeId node_id = backend_->AddNode(
-        matching_result->insertion_result->constant_data, trajectory_id_,
-        matching_result->insertion_result->insertion_submaps);
-    CHECK_EQ(node_id.trajectory_id, trajectory_id_);
-    insertion_result = absl::make_unique<InsertionResult>(InsertionResult{
-        node_id, matching_result->insertion_result->constant_data,
-        std::vector<std::shared_ptr<const Submap>>(
-            matching_result->insertion_result->insertion_submaps.begin(),
-            matching_result->insertion_result->insertion_submaps.end())});
+  if (matching_result->tracking_lost) {
+    ++lost_holds_;
+    const bool due =
+        lost_holds_ >= 3 &&
+        (last_relocalize_attempt_ == common::Time::min() ||
+         common::ToSeconds(matching_result->time - last_relocalize_attempt_) >
+             0.5);
+    if (lost_holds_ == 1 || lost_holds_ % 10 == 0) {
+      LOG(INFO) << "Holding pose; wheel odometry is still but the local "
+                   "match walked. holds="
+                << lost_holds_;
+    }
+    if (due) {
+      last_relocalize_attempt_ = matching_result->time;
+      if (auto recovered = backend_->Relocalize(matching_result->lost_cloud,
+                                                matching_result->local_pose)) {
+        const bool agrees =
+            have_relocalize_candidate_ &&
+            (recovered->translation() - relocalize_candidate_.translation())
+                    .norm() < 0.40 &&
+            std::abs(transform::Yaw(relocalize_candidate_.inverse() *
+                                     *recovered)) < 0.35;
+        if (agrees) {
+          auto local_insertion = local_slam_->CommitRelocalizedPose(
+              matching_result->time, *recovered,
+              matching_result->tracking_range_data);
+          published_pose = *recovered;
+          lost_holds_ = 0;
+          have_relocalize_candidate_ = false;
+          LOG(INFO) << "Relocalization confirmed at "
+                    << recovered->translation().x() << ", "
+                    << recovered->translation().y();
+          if (local_insertion != nullptr) {
+            const NodeId node_id = backend_->AddNode(
+                local_insertion->constant_data, trajectory_id_,
+                local_insertion->insertion_submaps);
+            CHECK_EQ(node_id.trajectory_id, trajectory_id_);
+            insertion_result = absl::make_unique<InsertionResult>(InsertionResult{
+                node_id, local_insertion->constant_data,
+                std::vector<std::shared_ptr<const Submap>>(
+                    local_insertion->insertion_submaps.begin(),
+                    local_insertion->insertion_submaps.end())});
+          }
+        } else {
+          relocalize_candidate_ = *recovered;
+          have_relocalize_candidate_ = true;
+          LOG(INFO) << "Relocalization candidate at "
+                    << recovered->translation().x() << ", "
+                    << recovered->translation().y()
+                    << ", waiting for a second scan";
+        }
+      }
+    }
+  } else {
+    lost_holds_ = 0;
+    have_relocalize_candidate_ = false;
+    if (matching_result->insertion_result != nullptr) {
+      const NodeId node_id = backend_->AddNode(
+          matching_result->insertion_result->constant_data, trajectory_id_,
+          matching_result->insertion_result->insertion_submaps);
+      CHECK_EQ(node_id.trajectory_id, trajectory_id_);
+      insertion_result = absl::make_unique<InsertionResult>(InsertionResult{
+          node_id, matching_result->insertion_result->constant_data,
+          std::vector<std::shared_ptr<const Submap>>(
+              matching_result->insertion_result->insertion_submaps.begin(),
+              matching_result->insertion_result->insertion_submaps.end())});
+    }
   }
   if (local_slam_result_callback_) {
     local_slam_result_callback_(
-        trajectory_id_, matching_result->time, matching_result->local_pose,
+        trajectory_id_, matching_result->time, published_pose,
         std::move(matching_result->range_data_in_local),
         std::move(insertion_result));
   }

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "absl/types/optional.h"
+#include "cartographer/foundation/time.h"
 #include "cartographer/frontend/data_dispatcher.h"
 #include "cartographer/frontend/local_slam_2d.h"
 #include "cartographer/frontend/motion_filter.h"
@@ -74,6 +75,10 @@ class Frontend2D {
   std::unique_ptr<LocalSlam2D> local_slam_;
   LocalSlamResultCallback local_slam_result_callback_;
   absl::optional<MotionFilter> pose_graph_odometry_motion_filter_;
+  int lost_holds_ = 0;
+  common::Time last_relocalize_attempt_ = common::Time::min();
+  bool have_relocalize_candidate_ = false;
+  transform::Rigid2d relocalize_candidate_;
 };
 
 }  // namespace cartographer::mapping

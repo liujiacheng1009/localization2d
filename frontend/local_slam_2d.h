@@ -50,6 +50,11 @@ class LocalSlam2D {
     sensor::RangeData range_data_in_local;
     // 'nullptr' if dropped by the motion filter.
     std::unique_ptr<const InsertionResult> insertion_result;
+    // Wheel odometry stayed still while the local window walked the pose.
+    // The returned pose is the last accepted one, and nothing was inserted.
+    bool tracking_lost = false;
+    sensor::PointCloud lost_cloud;
+    sensor::RangeData tracking_range_data;
   };
 
   explicit LocalSlam2D(
@@ -69,6 +74,11 @@ class LocalSlam2D {
       const std::string& sensor_id,
       const sensor::TimedPointCloudData& range_data);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
+  // Jump to a pose found in a finished submap and insert there, instead of
+  // painting the scan into the submap the robot was carried away from.
+  std::unique_ptr<InsertionResult> CommitRelocalizedPose(
+      common::Time time, const transform::Rigid2d& local_pose,
+      const sensor::RangeData& tracking_range_data);
 
  private:
   std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
