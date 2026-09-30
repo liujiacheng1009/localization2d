@@ -194,11 +194,12 @@ LocalSlam2D::AddAccumulatedRangeData(
     return nullptr;
   }
   // The 0.15 m local window walks toward whichever wall fragment scores
-  // least badly. That step must not be inserted when the wheels did not
-  // translate. A carried robot is still in yaw as well: hold the last pose
-  // and ask for a global search. An in-place spin is not still in yaw, but
-  // the translation is still zero, so follow the wheel heading and do not
-  // start a global search.
+  // least badly. That step must not be inserted. A carried robot is still
+  // in translation and yaw: hold the last pose and ask for a global search.
+  // An in-place spin is still only in translation, so follow the wheel
+  // heading and do not start a global search. The same step while the
+  // wheels are already moving still must not be inserted, or the scan is
+  // written beside the wall the wheels actually passed.
   if (has_range_pose_) {
     const transform::Rigid2d from_last =
         extrapolator_->GetLastPose().inverse() * pose_prediction;
@@ -207,17 +208,18 @@ LocalSlam2D::AddAccumulatedRangeData(
     const bool translation_still = from_last.translation().norm() < 0.05;
     const bool yaw_still = std::abs(transform::Yaw(from_last)) < 0.08;
     const bool walked = from_prediction.translation().norm() > 0.12;
-    if (translation_still && walked) {
+    if (walked) {
+      const bool carried = translation_still && yaw_still;
       const transform::Rigid2d held =
-          yaw_still ? extrapolator_->GetLastPose() : pose_prediction;
-      if (!yaw_still) {
+          carried ? extrapolator_->GetLastPose() : pose_prediction;
+      if (!carried) {
         extrapolator_->AddPose(time, held);
         has_range_pose_ = true;
       }
       sensor::RangeData held_range = TransformRangeData(
           tracking_range_data, transform::Embed3D(held.cast<float>()));
       MatchingResult result{time, held, std::move(held_range), nullptr};
-      if (yaw_still) {
+      if (carried) {
         result.tracking_lost = true;
         result.lost_cloud = filtered_point_cloud;
         result.tracking_range_data = tracking_range_data;

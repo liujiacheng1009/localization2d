@@ -52,7 +52,9 @@ class LocalSlam2D {
     std::unique_ptr<const InsertionResult> insertion_result;
     // Wheels did not translate and did not yaw, while the local window
     // walked the pose. The returned pose is the last accepted one, and
-    // nothing was inserted. An in-place spin is not this case.
+    // nothing was inserted. An in-place spin, and a walk while the wheels
+    // are already moving, are not this case: those follow the wheel
+    // prediction and still insert nothing.
     bool tracking_lost = false;
     sensor::PointCloud lost_cloud;
     sensor::RangeData tracking_range_data;
