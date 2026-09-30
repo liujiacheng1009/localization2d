@@ -193,26 +193,35 @@ LocalSlam2D::AddAccumulatedRangeData(
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
-  // A carried robot keeps the wheels still. The 0.15 m local window then
-  // walks toward whichever wall fragment scores least badly, and each step
-  // is inserted. Hold the last pose and leave the submap unchanged.
+  // The 0.15 m local window walks toward whichever wall fragment scores
+  // least badly. That step must not be inserted when the wheels did not
+  // translate. A carried robot is still in yaw as well: hold the last pose
+  // and ask for a global search. An in-place spin is not still in yaw, but
+  // the translation is still zero, so follow the wheel heading and do not
+  // start a global search.
   if (has_range_pose_) {
     const transform::Rigid2d from_last =
         extrapolator_->GetLastPose().inverse() * pose_prediction;
     const transform::Rigid2d from_prediction =
         pose_prediction.inverse() * *pose_estimate_2d;
-    const bool odom_still =
-        from_last.translation().norm() < 0.05 &&
-        std::abs(transform::Yaw(from_last)) < 0.08;
+    const bool translation_still = from_last.translation().norm() < 0.05;
+    const bool yaw_still = std::abs(transform::Yaw(from_last)) < 0.08;
     const bool walked = from_prediction.translation().norm() > 0.12;
-    if (odom_still && walked) {
-      const transform::Rigid2d held = extrapolator_->GetLastPose();
+    if (translation_still && walked) {
+      const transform::Rigid2d held =
+          yaw_still ? extrapolator_->GetLastPose() : pose_prediction;
+      if (!yaw_still) {
+        extrapolator_->AddPose(time, held);
+        has_range_pose_ = true;
+      }
       sensor::RangeData held_range = TransformRangeData(
           tracking_range_data, transform::Embed3D(held.cast<float>()));
       MatchingResult result{time, held, std::move(held_range), nullptr};
-      result.tracking_lost = true;
-      result.lost_cloud = filtered_point_cloud;
-      result.tracking_range_data = tracking_range_data;
+      if (yaw_still) {
+        result.tracking_lost = true;
+        result.lost_cloud = filtered_point_cloud;
+        result.tracking_range_data = tracking_range_data;
+      }
       return absl::make_unique<MatchingResult>(std::move(result));
     }
   }

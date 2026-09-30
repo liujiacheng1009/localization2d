@@ -50,8 +50,9 @@ class LocalSlam2D {
     sensor::RangeData range_data_in_local;
     // 'nullptr' if dropped by the motion filter.
     std::unique_ptr<const InsertionResult> insertion_result;
-    // Wheel odometry stayed still while the local window walked the pose.
-    // The returned pose is the last accepted one, and nothing was inserted.
+    // Wheels did not translate and did not yaw, while the local window
+    // walked the pose. The returned pose is the last accepted one, and
+    // nothing was inserted. An in-place spin is not this case.
     bool tracking_lost = false;
     sensor::PointCloud lost_cloud;
     sensor::RangeData tracking_range_data;
