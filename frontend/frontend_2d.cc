@@ -77,30 +77,38 @@ void Frontend2D::ProcessSensorData(
          common::ToSeconds(matching_result->time - last_relocalize_attempt_) >
              0.5);
     if (lost_holds_ == 1 || lost_holds_ % 10 == 0) {
-      LOG(INFO) << "Holding pose; wheel odometry is still but the local "
-                   "match walked. holds="
-                << lost_holds_;
+      LOG(INFO) << "Holding pose after a lift or tilt. holds=" << lost_holds_;
     }
     if (due) {
       last_relocalize_attempt_ = matching_result->time;
-      if (auto recovered = backend_->Relocalize(matching_result->lost_cloud,
-                                                matching_result->local_pose)) {
+      const auto recovered = backend_->Relocalize(
+          matching_result->lost_cloud, matching_result->local_pose);
+      using Decision = TrajectoryBackend2D::Relocalization::Decision;
+      if (recovered.decision == Decision::kRejected) {
+        have_relocalize_candidate_ = false;
+      } else {
         const bool agrees =
             have_relocalize_candidate_ &&
-            (recovered->translation() - relocalize_candidate_.translation())
+            candidate_decision_ == recovered.decision &&
+            (recovered.pose.translation() - relocalize_candidate_.translation())
                     .norm() < 0.40 &&
             std::abs(transform::Yaw(relocalize_candidate_.inverse() *
-                                     *recovered)) < 0.35;
+                                     recovered.pose)) < 0.35;
         if (agrees) {
-          auto local_insertion = local_slam_->CommitRelocalizedPose(
-              matching_result->time, *recovered,
-              matching_result->tracking_range_data);
-          published_pose = *recovered;
+          const auto local_insertion =
+              recovered.decision == Decision::kJump
+                  ? local_slam_->CommitRelocalizedPose(
+                        matching_result->time, recovered.pose,
+                        matching_result->tracking_range_data)
+                  : local_slam_->ResumeMapping(
+                        matching_result->time, recovered.pose,
+                        matching_result->tracking_range_data);
+          published_pose = recovered.pose;
           lost_holds_ = 0;
           have_relocalize_candidate_ = false;
           LOG(INFO) << "Relocalization confirmed at "
-                    << recovered->translation().x() << ", "
-                    << recovered->translation().y();
+                    << recovered.pose.translation().x() << ", "
+                    << recovered.pose.translation().y();
           if (local_insertion != nullptr) {
             const NodeId node_id = backend_->AddNode(
                 local_insertion->constant_data, trajectory_id_,
@@ -113,11 +121,12 @@ void Frontend2D::ProcessSensorData(
                     local_insertion->insertion_submaps.end())});
           }
         } else {
-          relocalize_candidate_ = *recovered;
+          relocalize_candidate_ = recovered.pose;
+          candidate_decision_ = recovered.decision;
           have_relocalize_candidate_ = true;
           LOG(INFO) << "Relocalization candidate at "
-                    << recovered->translation().x() << ", "
-                    << recovered->translation().y()
+                    << recovered.pose.translation().x() << ", "
+                    << recovered.pose.translation().y()
                     << ", waiting for a second scan";
         }
       }
@@ -143,6 +152,10 @@ void Frontend2D::ProcessSensorData(
         std::move(matching_result->range_data_in_local),
         std::move(insertion_result));
   }
+}
+
+void Frontend2D::SetChassisTilt(const double tilt_radians) {
+  local_slam_->SetChassisTilt(tilt_radians);
 }
 
 void Frontend2D::ProcessSensorData(

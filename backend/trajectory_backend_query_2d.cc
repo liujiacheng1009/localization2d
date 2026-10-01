@@ -120,14 +120,14 @@ RelocalizationHit MatchMergedGrid(
 
 }  // namespace
 
-std::optional<transform::Rigid2d> TrajectoryBackend2D::Relocalize(
+TrajectoryBackend2D::Relocalization TrajectoryBackend2D::Relocalize(
     const sensor::PointCloud& cloud,
     const transform::Rigid2d& current_local) const {
   const sensor::PointCloud usable = cloud.copy_if([](const sensor::RangefinderPoint& point) {
     const float range = point.position.head<2>().norm();
     return range >= kMinPointRange && range <= kMaxPointRange;
   });
-  if (usable.size() < 30) return std::nullopt;
+  if (usable.size() < 30) return Relocalization{};
   std::vector<RelocalizationSample> samples;
   {
     absl::MutexLock locker(&mutex_);
@@ -158,18 +158,18 @@ std::optional<transform::Rigid2d> TrajectoryBackend2D::Relocalize(
       }
     }
   }
-  if (samples.empty()) return std::nullopt;
+  if (samples.empty()) return Relocalization{};
   ValueConversionTables conversion_tables;
   const auto merged =
       BuildRelocalizationGrid(samples, nullptr, &conversion_tables);
-  if (merged == nullptr) return std::nullopt;
+  if (merged == nullptr) return Relocalization{};
   const auto& matcher_options = options_.constraint_builder_options()
                                     .fast_correlative_scan_matcher_options();
   const RelocalizationHit best = MatchMergedGrid(*merged, usable, matcher_options);
   if (!best.found || best.score < kMinAcceptScore) {
     LOG(INFO) << "Relocalization rejected, best score "
               << (best.found ? best.score : 0.f);
-    return std::nullopt;
+    return Relocalization{};
   }
   std::vector<Eigen::Vector2f> hits;
   hits.reserve(usable.size());
@@ -196,18 +196,18 @@ std::optional<transform::Rigid2d> TrajectoryBackend2D::Relocalize(
               << " second " << second_score << " at ("
               << best.pose.translation().x() << ", "
               << best.pose.translation().y() << ")";
-    return std::nullopt;
-  }
-  if ((best.pose.translation() - current_local.translation()).norm() <
-      kMinJumpMeters) {
-    LOG(INFO) << "Relocalization stays, match is already near the held pose";
-    return std::nullopt;
+    return Relocalization{};
   }
   LOG(INFO) << "Relocalization score " << best.score << " second " << second_score
             << " at (" << best.pose.translation().x() << ", "
             << best.pose.translation().y() << ") yaw "
             << transform::Yaw(best.pose);
-  return best.pose;
+  if ((best.pose.translation() - current_local.translation()).norm() <
+      kMinJumpMeters) {
+    LOG(INFO) << "Relocalization stays, match is already near the held pose";
+    return {Relocalization::Decision::kStay, best.pose};
+  }
+  return {Relocalization::Decision::kJump, best.pose};
 }
 
 MapById<NodeId, TrajectoryNode> TrajectoryBackend2D::GetTrajectoryNodes() const {

@@ -104,10 +104,17 @@ class TrajectoryBackend2D {
       LOCKS_EXCLUDED(mutex_);
   MapById<SubmapId, SubmapData> GetAllSubmapData() const
       LOCKS_EXCLUDED(mutex_);
-  // Full-map branch-and-bound relocalization for a carried robot. Returns a
-  // local-frame pose only when the best hypothesis is well above the next
-  // distinct place and far from 'current_local'.
-  std::optional<transform::Rigid2d> Relocalize(
+  // Full-map branch-and-bound for a robot that was lifted or tilted.
+  // kRejected: the scan does not lock anywhere.
+  // kStay: the best pose is already within 0.8 m of 'current_local'. The
+  // chassis was put back near where it was held; mapping may continue there.
+  // kJump: a distinct pose far from the held one, clear of the next hypothesis.
+  struct Relocalization {
+    enum class Decision { kRejected, kStay, kJump };
+    Decision decision = Decision::kRejected;
+    transform::Rigid2d pose{};
+  };
+  Relocalization Relocalize(
       const sensor::PointCloud& cloud,
       const transform::Rigid2d& current_local) const
       LOCKS_EXCLUDED(mutex_);

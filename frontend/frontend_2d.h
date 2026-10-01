@@ -61,6 +61,7 @@ class Frontend2D {
                      const sensor::TimedPointCloudData& data);
   void AddSensorData(const std::string& sensor_id,
                      const sensor::OdometryData& data);
+  void SetChassisTilt(double tilt_radians);
 
  private:
   void HandleSensorData(const std::string& sensor_id, sensor::SensorData data);
@@ -78,6 +79,8 @@ class Frontend2D {
   int lost_holds_ = 0;
   common::Time last_relocalize_attempt_ = common::Time::min();
   bool have_relocalize_candidate_ = false;
+  TrajectoryBackend2D::Relocalization::Decision candidate_decision_ =
+      TrajectoryBackend2D::Relocalization::Decision::kRejected;
   transform::Rigid2d relocalize_candidate_;
 };
 

@@ -20,12 +20,22 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <numbers>
 
 #include "absl/memory/memory.h"
 #include "cartographer/foundation/sensor_data.h"
 
 namespace cartographer {
 namespace mapping {
+namespace {
+
+// On the 160418 run the chassis sat near 1 degree while driving. Sustained
+// tilts of 15 to 23 degrees were the lifts and the threshold crossings.
+// 12 degrees starts the hold; 6 degrees is level enough to search again.
+constexpr double kTiltEnterRadians = 12. * std::numbers::pi / 180.;
+constexpr double kTiltExitRadians = 6. * std::numbers::pi / 180.;
+
+}  // namespace
 
 LocalSlam2D::LocalSlam2D(
     const LocalTrajectoryBuilderOptions2D& options,
@@ -187,6 +197,19 @@ LocalSlam2D::AddAccumulatedRangeData(
     return nullptr;
   }
 
+  const double tilt = chassis_tilt_.load();
+  if (has_range_pose_ && tilt > kTiltEnterRadians && !suspended_) {
+    suspended_ = true;
+    LOG(INFO) << "Chassis tilted " << tilt
+              << " rad; holding the last pose and not inserting";
+  }
+  // A tilted or lifted chassis must not add a keyframe. Relocalization waits
+  // until the chassis is level again; a tilted scan would lock onto a wall.
+  if (has_range_pose_ && suspended_) {
+    return HoldLastPose(time, tracking_range_data, filtered_point_cloud,
+                        tilt < kTiltExitRadians);
+  }
+
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
       ScanMatch(time, pose_prediction, filtered_point_cloud);
   if (pose_estimate_2d == nullptr) {
@@ -194,12 +217,10 @@ LocalSlam2D::AddAccumulatedRangeData(
     return nullptr;
   }
   // The 0.15 m local window walks toward whichever wall fragment scores
-  // least badly. That step must not be inserted. A carried robot is still
-  // in translation and yaw: hold the last pose and ask for a global search.
-  // An in-place spin is still only in translation, so follow the wheel
-  // heading and do not start a global search. The same step while the
-  // wheels are already moving still must not be inserted, or the scan is
-  // written beside the wall the wheels actually passed.
+  // least badly. That step must not be inserted. Wheels still in translation
+  // and yaw means the chassis was lifted while level: latch the hold and
+  // relocalize. An in-place spin, or a match that outruns a real wheel step,
+  // follows the wheel prediction and does not start a search.
   if (has_range_pose_) {
     const transform::Rigid2d from_last =
         extrapolator_->GetLastPose().inverse() * pose_prediction;
@@ -208,22 +229,22 @@ LocalSlam2D::AddAccumulatedRangeData(
     const bool translation_still = from_last.translation().norm() < 0.05;
     const bool yaw_still = std::abs(transform::Yaw(from_last)) < 0.08;
     const bool walked = from_prediction.translation().norm() > 0.12;
-    if (walked) {
-      const bool carried = translation_still && yaw_still;
-      const transform::Rigid2d held =
-          carried ? extrapolator_->GetLastPose() : pose_prediction;
-      if (!carried) {
-        extrapolator_->AddPose(time, held);
-        has_range_pose_ = true;
+    if (walked && translation_still && yaw_still) {
+      if (!suspended_) {
+        LOG(INFO) << "Chassis lifted with the wheels still; holding the last "
+                     "pose until it is level and relocalized";
       }
+      suspended_ = true;
+      return HoldLastPose(time, tracking_range_data, filtered_point_cloud,
+                          true);
+    }
+    if (walked) {
+      const transform::Rigid2d held = pose_prediction;
+      extrapolator_->AddPose(time, held);
+      has_range_pose_ = true;
       sensor::RangeData held_range = TransformRangeData(
           tracking_range_data, transform::Embed3D(held.cast<float>()));
       MatchingResult result{time, held, std::move(held_range), nullptr};
-      if (carried) {
-        result.tracking_lost = true;
-        result.lost_cloud = filtered_point_cloud;
-        result.tracking_range_data = tracking_range_data;
-      }
       return absl::make_unique<MatchingResult>(std::move(result));
     }
   }
@@ -278,6 +299,7 @@ LocalSlam2D::CommitRelocalizedPose(
     const common::Time time, const transform::Rigid2d& local_pose,
     const sensor::RangeData& tracking_range_data) {
   CHECK(extrapolator_ != nullptr);
+  suspended_ = false;
   extrapolator_->AddPose(time, local_pose);
   has_range_pose_ = true;
   active_submaps_.ReplaceWithNewOrigin(local_pose.translation().cast<float>());
@@ -287,6 +309,40 @@ LocalSlam2D::CommitRelocalizedPose(
       tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
   LOG(INFO) << "Relocalized local pose to (" << local_pose.translation().x()
             << ", " << local_pose.translation().y() << ")";
+  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose);
+}
+
+void LocalSlam2D::SetChassisTilt(const double tilt_radians) {
+  chassis_tilt_.store(tilt_radians);
+}
+
+std::unique_ptr<LocalSlam2D::MatchingResult> LocalSlam2D::HoldLastPose(
+    const common::Time time, const sensor::RangeData& tracking_range_data,
+    const sensor::PointCloud& filtered_point_cloud, const bool relocalize) {
+  const transform::Rigid2d held = extrapolator_->GetLastPose();
+  sensor::RangeData held_range = TransformRangeData(
+      tracking_range_data, transform::Embed3D(held.cast<float>()));
+  MatchingResult result{time, held, std::move(held_range), nullptr};
+  if (relocalize) {
+    result.tracking_lost = true;
+    result.lost_cloud = filtered_point_cloud;
+    result.tracking_range_data = tracking_range_data;
+  }
+  return absl::make_unique<MatchingResult>(std::move(result));
+}
+
+std::unique_ptr<LocalSlam2D::InsertionResult> LocalSlam2D::ResumeMapping(
+    const common::Time time, const transform::Rigid2d& local_pose,
+    const sensor::RangeData& tracking_range_data) {
+  CHECK(extrapolator_ != nullptr);
+  suspended_ = false;
+  extrapolator_->AddPose(time, local_pose);
+  has_range_pose_ = true;
+  const sensor::PointCloud filtered = sensor::AdaptiveVoxelFilter(
+      tracking_range_data.returns, options_.adaptive_voxel_filter_options());
+  const sensor::RangeData range_data_in_local = TransformRangeData(
+      tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
+  LOG(INFO) << "Relocalization stayed at the held pose; mapping resumes";
   return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose);
 }
 

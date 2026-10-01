@@ -17,6 +17,7 @@
 #ifndef CARTOGRAPHER_TRAJECTORY_LOCAL_SLAM_2D_H_
 #define CARTOGRAPHER_TRAJECTORY_LOCAL_SLAM_2D_H_
 
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <string>
@@ -50,11 +51,9 @@ class LocalSlam2D {
     sensor::RangeData range_data_in_local;
     // 'nullptr' if dropped by the motion filter.
     std::unique_ptr<const InsertionResult> insertion_result;
-    // Wheels did not translate and did not yaw, while the local window
-    // walked the pose. The returned pose is the last accepted one, and
-    // nothing was inserted. An in-place spin, and a walk while the wheels
-    // are already moving, are not this case: those follow the wheel
-    // prediction and still insert nothing.
+    // The chassis is being carried, or it was tilted and is level again.
+    // The returned pose is the last accepted one and nothing was inserted.
+    // A global search may run. An in-place spin is not this case.
     bool tracking_lost = false;
     sensor::PointCloud lost_cloud;
     sensor::RangeData tracking_range_data;
@@ -77,13 +76,23 @@ class LocalSlam2D {
       const std::string& sensor_id,
       const sensor::TimedPointCloudData& range_data);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
+  // Latest IMU tilt of the chassis, in radians from level. Zero until an
+  // IMU sample arrives. Scan matching reads this on the mapping thread.
+  void SetChassisTilt(double tilt_radians);
   // Jump to a pose found in a finished submap and insert there, instead of
   // painting the scan into the submap the robot was carried away from.
   std::unique_ptr<InsertionResult> CommitRelocalizedPose(
       common::Time time, const transform::Rigid2d& local_pose,
       const sensor::RangeData& tracking_range_data);
+  // The search found the held pose again. Keep the current submap and insert.
+  std::unique_ptr<InsertionResult> ResumeMapping(
+      common::Time time, const transform::Rigid2d& local_pose,
+      const sensor::RangeData& tracking_range_data);
 
  private:
+  std::unique_ptr<MatchingResult> HoldLastPose(
+      common::Time time, const sensor::RangeData& tracking_range_data,
+      const sensor::PointCloud& filtered_point_cloud, bool relocalize);
   std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
       common::Time time, const sensor::RangeData& tracking_range_data);
   sensor::RangeData TransformToCurrentTrackingFrameAndFilter(
@@ -114,6 +123,10 @@ class LocalSlam2D {
   std::unique_ptr<PoseExtrapolator> extrapolator_;
   std::deque<sensor::OdometryData> pending_odometry_data_;
   bool has_range_pose_ = false;
+  // Latched while the chassis is tilted or lifted. Cleared only after a
+  // level scan relocalizes, either by staying or by jumping.
+  bool suspended_ = false;
+  std::atomic<double> chassis_tilt_{0.};
 
   int num_accumulated_ = 0;
   sensor::RangeData accumulated_range_data_;
