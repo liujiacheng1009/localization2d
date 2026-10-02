@@ -77,6 +77,7 @@ class Frontend2D {
   LocalSlamResultCallback local_slam_result_callback_;
   absl::optional<MotionFilter> pose_graph_odometry_motion_filter_;
   int lost_holds_ = 0;
+  int relocalize_rejections_ = 0;
   common::Time last_relocalize_attempt_ = common::Time::min();
   bool have_relocalize_candidate_ = false;
   TrajectoryBackend2D::Relocalization::Decision candidate_decision_ =

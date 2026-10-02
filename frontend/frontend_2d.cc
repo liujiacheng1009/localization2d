@@ -86,6 +86,36 @@ void Frontend2D::ProcessSensorData(
       using Decision = TrajectoryBackend2D::Relocalization::Decision;
       if (recovered.decision == Decision::kRejected) {
         have_relocalize_candidate_ = false;
+        ++relocalize_rejections_;
+        // A permanently rejected relocalization leaves the mapper publishing
+        // the same held pose forever.  The odometry-backed local pose is still
+        // the best bounded continuation for a planar base; after a finite
+        // number of failures, insert one scan at that predicted pose so the
+        // next scan can re-enter normal matching.  This prevents a valid map
+        // from appearing frozen while the robot is still receiving scans.
+        if (relocalize_rejections_ >= 12) {
+          const auto local_insertion = local_slam_->ResumeMapping(
+              matching_result->time, matching_result->local_pose,
+              matching_result->tracking_range_data);
+          if (local_insertion != nullptr) {
+            published_pose = matching_result->local_pose;
+            lost_holds_ = 0;
+            relocalize_rejections_ = 0;
+            const NodeId node_id = backend_->AddNode(
+                local_insertion->constant_data, trajectory_id_,
+                local_insertion->insertion_submaps);
+            CHECK_EQ(node_id.trajectory_id, trajectory_id_);
+            insertion_result = absl::make_unique<InsertionResult>(InsertionResult{
+                node_id, local_insertion->constant_data,
+                std::vector<std::shared_ptr<const Submap>>(
+                    local_insertion->insertion_submaps.begin(),
+                    local_insertion->insertion_submaps.end())});
+            LOG(WARNING) << "Relocalization rejected " << 12
+                         << " times; resumed mapping at odometry-predicted pose "
+                         << matching_result->local_pose.translation().x() << ", "
+                         << matching_result->local_pose.translation().y();
+          }
+        }
       } else {
         const bool agrees =
             have_relocalize_candidate_ &&
@@ -105,6 +135,7 @@ void Frontend2D::ProcessSensorData(
                         matching_result->tracking_range_data);
           published_pose = recovered.pose;
           lost_holds_ = 0;
+          relocalize_rejections_ = 0;
           have_relocalize_candidate_ = false;
           LOG(INFO) << "Relocalization confirmed at "
                     << recovered.pose.translation().x() << ", "
@@ -133,6 +164,7 @@ void Frontend2D::ProcessSensorData(
     }
   } else {
     lost_holds_ = 0;
+    relocalize_rejections_ = 0;
     have_relocalize_candidate_ = false;
     if (matching_result->insertion_result != nullptr) {
       const NodeId node_id = backend_->AddNode(
