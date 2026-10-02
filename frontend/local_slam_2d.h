@@ -127,6 +127,7 @@ class LocalSlam2D {
   // level scan relocalizes, either by staying or by jumping.
   bool suspended_ = false;
   std::atomic<double> chassis_tilt_{0.};
+  common::Time tilt_high_since_ = common::Time::min();
 
   int num_accumulated_ = 0;
   sensor::RangeData accumulated_range_data_;

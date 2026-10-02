@@ -198,7 +198,19 @@ LocalSlam2D::AddAccumulatedRangeData(
   }
 
   const double tilt = chassis_tilt_.load();
-  if (has_range_pose_ && tilt > kTiltEnterRadians && !suspended_) {
+  if (tilt > kTiltEnterRadians) {
+    if (tilt_high_since_ == common::Time::min()) tilt_high_since_ = time;
+  } else {
+    tilt_high_since_ = common::Time::min();
+  }
+  // A single IMU attitude spike while turning is not evidence that the
+  // chassis was lifted. Require a full second above the enter threshold
+  // before latching the hold; otherwise a transient tilt can freeze mapping
+  // and make every subsequent relocalization attempt fail.
+  const bool sustained_tilt =
+      tilt_high_since_ != common::Time::min() &&
+      common::ToSeconds(time - tilt_high_since_) >= 1.0;
+  if (has_range_pose_ && sustained_tilt && !suspended_) {
     suspended_ = true;
     LOG(INFO) << "Chassis tilted " << tilt
               << " rad; holding the last pose and not inserting";
