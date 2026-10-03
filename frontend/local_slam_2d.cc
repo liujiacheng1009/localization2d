@@ -66,7 +66,10 @@ LocalSlam2D::TransformToCurrentTrackingFrameAndFilter(
 
 std::unique_ptr<transform::Rigid2d> LocalSlam2D::ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
-    const sensor::PointCloud& filtered_point_cloud) {
+    const sensor::PointCloud& filtered_point_cloud,
+    double* const correlative_score) {
+  CHECK(correlative_score != nullptr);
+  *correlative_score = -1.;
   if (active_submaps_.submaps().empty()) {
     return absl::make_unique<transform::Rigid2d>(pose_prediction);
   }
@@ -74,7 +77,7 @@ std::unique_ptr<transform::Rigid2d> LocalSlam2D::ScanMatch(
       active_submaps_.submaps().front();
   transform::Rigid2d initial_ceres_pose = pose_prediction;
   if (options_.use_online_correlative_scan_matching()) {
-    real_time_correlative_scan_matcher_.Match(
+    *correlative_score = real_time_correlative_scan_matcher_.Match(
         pose_prediction, filtered_point_cloud, *matching_submap->grid(),
         &initial_ceres_pose);
   }
@@ -222,17 +225,19 @@ LocalSlam2D::AddAccumulatedRangeData(
                         tilt < kTiltExitRadians);
   }
 
+  double correlative_score = -1.;
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
-      ScanMatch(time, pose_prediction, filtered_point_cloud);
+      ScanMatch(time, pose_prediction, filtered_point_cloud,
+                &correlative_score);
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
-  // The 0.15 m local window walks toward whichever wall fragment scores
-  // least badly. That step must not be inserted. Wheels still in translation
-  // and yaw means the chassis was lifted while level: latch the hold and
-  // relocalize. An in-place spin, or a match that outruns a real wheel step,
-  // follows the wheel prediction and does not start a search.
+  // The local correlative window can occasionally choose a nearby wall
+  // fragment. Compare that displacement with wheel odometry before accepting
+  // it; only a high-confidence, bounded laser match may override a stale
+  // odometry sample. A low-confidence disagreement uses the prediction for
+  // this frame and never latches a localization hold.
   if (has_range_pose_) {
     const transform::Rigid2d from_last =
         extrapolator_->GetLastPose().inverse() * pose_prediction;
@@ -242,24 +247,33 @@ LocalSlam2D::AddAccumulatedRangeData(
     const bool yaw_still = std::abs(transform::Yaw(from_last)) < 0.08;
     const bool walked = from_prediction.translation().norm() > 0.12;
     if (walked && translation_still && yaw_still) {
-      // A delayed or dropped wheel-odometry sample can make a real motion
-      // look stationary for one scan.  Treating that single disagreement as
-      // a physical lift permanently suspended the frontend and left the
-      // navigator publishing commands against a frozen pose.  Keep the
-      // bounded wheel prediction for this frame and let the next odometry
-      // samples decide; the sustained IMU-tilt gate above remains the actual
-      // lift/tilt safety hold.
-      LOG_EVERY_N(WARNING, 20)
-          << "Scan/odometry motion disagreement; using odometry prediction "
-             "without latching localization hold. scan_delta="
-          << from_prediction.translation().norm();
-      const transform::Rigid2d held = pose_prediction;
-      extrapolator_->AddPose(time, held);
-      has_range_pose_ = true;
-      sensor::RangeData held_range = TransformRangeData(
-          tracking_range_data, transform::Embed3D(held.cast<float>()));
-      MatchingResult result{time, held, std::move(held_range), nullptr};
-      return absl::make_unique<MatchingResult>(std::move(result));
+      // Prefer a well-supported laser match over a stale wheel sample. The
+      // correlative score is normalized to [0, 1] and is only available when
+      // online correlative matching is enabled. A high score plus a bounded
+      // displacement is evidence that the robot really moved; otherwise use
+      // the odometry prediction for this frame without latching suspension.
+      constexpr double kHighConfidenceScore = 0.65;
+      constexpr double kMaximumTrustedScanJump = 0.50;
+      const bool trusted_scan = correlative_score >= kHighConfidenceScore &&
+          from_prediction.translation().norm() <= kMaximumTrustedScanJump;
+      if (trusted_scan) {
+        LOG_EVERY_N(INFO, 20)
+            << "Trusted laser motion despite stale odometry: score="
+            << correlative_score << " scan_delta="
+            << from_prediction.translation().norm();
+      } else {
+        LOG_EVERY_N(WARNING, 20)
+            << "Scan/odometry disagreement; using odometry prediction: score="
+            << correlative_score << " scan_delta="
+            << from_prediction.translation().norm();
+        const transform::Rigid2d held = pose_prediction;
+        extrapolator_->AddPose(time, held);
+        has_range_pose_ = true;
+        sensor::RangeData held_range = TransformRangeData(
+            tracking_range_data, transform::Embed3D(held.cast<float>()));
+        MatchingResult result{time, held, std::move(held_range), nullptr};
+        return absl::make_unique<MatchingResult>(std::move(result));
+      }
     }
     if (walked) {
       const transform::Rigid2d held = pose_prediction;

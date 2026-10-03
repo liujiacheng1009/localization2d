@@ -108,7 +108,8 @@ class LocalSlam2D {
   // observed pose, or nullptr on failure.
   std::unique_ptr<transform::Rigid2d> ScanMatch(
       common::Time time, const transform::Rigid2d& pose_prediction,
-      const sensor::PointCloud& filtered_point_cloud);
+      const sensor::PointCloud& filtered_point_cloud,
+      double* correlative_score);
 
   // Lazily constructs a PoseExtrapolator.
   void InitializeExtrapolator(common::Time time);
