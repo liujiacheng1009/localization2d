@@ -20,6 +20,13 @@ namespace {
 
 constexpr double kOdometryHistorySeconds = 0.5;
 constexpr double kMaxOdometryExtrapolateSeconds = 0.08;
+// Never continue integrating the last wheel sample after the transport has
+// gone stale.  The old constant-twist fallback could apply a 2--5 second old
+// angular velocity to a new scan and rotate the SLAM pose away from the laser
+// map.  A quarter second covers normal USB jitter while making a lost odom
+// packet harmless; the scan matcher can then recover the pose.
+constexpr double kMaxStaleOdometrySeconds = 0.25;
+constexpr double kMaxUnbackedExtrapolationSeconds = 0.25;
 
 transform::Rigid2d IntegrateBodyTwist(const Eigen::Vector2d& velocity_in_tracking,
                                       const double angular_velocity,
@@ -131,9 +138,15 @@ transform::Rigid2d PoseExtrapolator::TrackingMotion(
   }
   Eigen::Vector2d velocity_in_tracking = Eigen::Vector2d::Zero();
   double angular_velocity = 0.;
-  CurrentBodyTwist(&velocity_in_tracking, &angular_velocity);
-  return IntegrateBodyTwist(velocity_in_tracking, angular_velocity,
-                            common::ToSeconds(time - reference_time));
+  const double delta_t = common::ToSeconds(time - reference_time);
+  // There is no trustworthy motion model across a long sensor gap.  Returning
+  // identity here keeps the last laser pose stable instead of extrapolating
+  // with stale wheel/pose velocity and creating a false map rotation.
+  if (std::abs(delta_t) > kMaxUnbackedExtrapolationSeconds) {
+    return transform::Rigid2d();
+  }
+  CurrentBodyTwist(time, &velocity_in_tracking, &angular_velocity);
+  return IntegrateBodyTwist(velocity_in_tracking, angular_velocity, delta_t);
 }
 
 bool PoseExtrapolator::InterpolateOdometry(
@@ -183,6 +196,7 @@ bool PoseExtrapolator::InterpolateOdometry(
 }
 
 void PoseExtrapolator::CurrentBodyTwist(
+    const common::Time query_time,
     Eigen::Vector2d* linear_velocity_in_tracking,
     double* angular_velocity) const {
   CHECK(linear_velocity_in_tracking != nullptr);
@@ -193,6 +207,15 @@ void PoseExtrapolator::CurrentBodyTwist(
     const double time_delta = common::ToSeconds(newer.time - older.time);
     if (time_delta >= 1e-4) {
       const transform::Rigid2d pose_delta = older.pose.inverse() * newer.pose;
+      // A valid-looking last pair is still unusable when the odometry topic
+      // stopped.  Do not let its velocity drive every later laser scan.
+      const double age = common::ToSeconds(query_time - newer.time);
+      if (age > kMaxStaleOdometrySeconds ||
+          age < -kMaxStaleOdometrySeconds) {
+        *linear_velocity_in_tracking = Eigen::Vector2d::Zero();
+        *angular_velocity = 0.;
+        return;
+      }
       *linear_velocity_in_tracking = pose_delta.translation() / time_delta;
       *angular_velocity = transform::Yaw(pose_delta) / time_delta;
       return;
@@ -202,7 +225,8 @@ void PoseExtrapolator::CurrentBodyTwist(
     const TimedPose& oldest = timed_pose_queue_.front();
     const TimedPose& newest = timed_pose_queue_.back();
     const double time_delta = common::ToSeconds(newest.time - oldest.time);
-    if (time_delta >= 1e-3) {
+    const double age = common::ToSeconds(query_time - newest.time);
+    if (time_delta >= 1e-3 && std::abs(age) <= kMaxUnbackedExtrapolationSeconds) {
       *angular_velocity =
           transform::Yaw(oldest.pose.inverse() * newest.pose) / time_delta;
       *linear_velocity_in_tracking =

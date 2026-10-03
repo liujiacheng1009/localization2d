@@ -49,7 +49,8 @@ class PoseExtrapolator {
   void UpdateVelocitiesFromPoses();
   void TrimOdometryData();
   bool InterpolateOdometry(common::Time time, transform::Rigid2d* pose) const;
-  void CurrentBodyTwist(Eigen::Vector2d* linear_velocity_in_tracking,
+  void CurrentBodyTwist(common::Time query_time,
+                        Eigen::Vector2d* linear_velocity_in_tracking,
                         double* angular_velocity) const;
 
   const common::Duration pose_queue_duration_;
