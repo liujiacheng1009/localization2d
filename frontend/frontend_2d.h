@@ -62,6 +62,8 @@ class Frontend2D {
   void AddSensorData(const std::string& sensor_id,
                      const sensor::OdometryData& data);
   void SetChassisTilt(double tilt_radians);
+  // Read on the sensor-processing thread, including inside the result callback.
+  bool IsTracking() const { return local_slam_->IsTracking(); }
 
  private:
   void HandleSensorData(const std::string& sensor_id, sensor::SensorData data);

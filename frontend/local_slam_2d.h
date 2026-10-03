@@ -79,6 +79,7 @@ class LocalSlam2D {
   // Latest IMU tilt of the chassis, in radians from level. Zero until an
   // IMU sample arrives. Scan matching reads this on the mapping thread.
   void SetChassisTilt(double tilt_radians);
+  bool IsTracking() const { return !suspended_; }
   // Jump to a pose found in a finished submap and insert there, instead of
   // painting the scan into the submap the robot was carried away from.
   std::unique_ptr<InsertionResult> CommitRelocalizedPose(
