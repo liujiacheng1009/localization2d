@@ -242,13 +242,24 @@ LocalSlam2D::AddAccumulatedRangeData(
     const bool yaw_still = std::abs(transform::Yaw(from_last)) < 0.08;
     const bool walked = from_prediction.translation().norm() > 0.12;
     if (walked && translation_still && yaw_still) {
-      if (!suspended_) {
-        LOG(INFO) << "Chassis lifted with the wheels still; holding the last "
-                     "pose until it is level and relocalized";
-      }
-      suspended_ = true;
-      return HoldLastPose(time, tracking_range_data, filtered_point_cloud,
-                          true);
+      // A delayed or dropped wheel-odometry sample can make a real motion
+      // look stationary for one scan.  Treating that single disagreement as
+      // a physical lift permanently suspended the frontend and left the
+      // navigator publishing commands against a frozen pose.  Keep the
+      // bounded wheel prediction for this frame and let the next odometry
+      // samples decide; the sustained IMU-tilt gate above remains the actual
+      // lift/tilt safety hold.
+      LOG_EVERY_N(WARNING, 20)
+          << "Scan/odometry motion disagreement; using odometry prediction "
+             "without latching localization hold. scan_delta="
+          << from_prediction.translation().norm();
+      const transform::Rigid2d held = pose_prediction;
+      extrapolator_->AddPose(time, held);
+      has_range_pose_ = true;
+      sensor::RangeData held_range = TransformRangeData(
+          tracking_range_data, transform::Embed3D(held.cast<float>()));
+      MatchingResult result{time, held, std::move(held_range), nullptr};
+      return absl::make_unique<MatchingResult>(std::move(result));
     }
     if (walked) {
       const transform::Rigid2d held = pose_prediction;
