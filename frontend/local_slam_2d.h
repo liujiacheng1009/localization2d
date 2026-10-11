@@ -57,6 +57,9 @@ class LocalSlam2D {
     bool tracking_lost = false;
     sensor::PointCloud lost_cloud;
     sensor::RangeData tracking_range_data;
+    // Returns dropped by the far-disagree insert filter (local frame). Empty
+    // when the filter is off or the whole insert was skipped.
+    sensor::PointCloud rejected_insert_hits;
   };
 
   explicit LocalSlam2D(
@@ -112,7 +115,18 @@ class LocalSlam2D {
   std::unique_ptr<InsertionResult> InsertIntoSubmap(
       common::Time time, const sensor::RangeData& range_data_in_local,
       const sensor::PointCloud& filtered_point_cloud,
-      const transform::Rigid2d& pose_estimate);
+      const transform::Rigid2d& pose_estimate,
+      sensor::PointCloud* rejected_insert_hits,
+      bool apply_far_disagree_filter = true);
+  // Keeps near returns and far returns that match the first wall along the
+  // ray (or explore unknown). Drops far returns whose range disagrees.
+  sensor::RangeData FilterFarDisagreeingInsertHits(
+      const sensor::RangeData& range_data_in_local,
+      sensor::PointCloud* rejected_hits) const;
+  // True when too many far returns are ghost-band rejects — do not insert.
+  bool FarDisagreeRatioSkipInsert(
+      const sensor::RangeData& range_data_in_local,
+      const sensor::PointCloud& rejected_hits) const;
 
   // Scan matches 'filtered_point_cloud' and returns the
   // observed pose, or nullptr on failure.

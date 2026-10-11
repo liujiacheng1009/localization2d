@@ -164,6 +164,17 @@ struct LocalTrajectoryBuilderOptions2D {
   CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_half_scan_linear_search_window)
   CARTOGRAPHER_OPTION_SCALAR(double,
                              skip_insert_half_scan_angular_search_window)
+  // Insert-only max range. Matching still uses trajectory max_range. 0 = off.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_max_range_meters)
+  // Insert-only: drop returns beyond min_range that disagree with the active
+  // submap. Threshold is base + per_meter * range. Matching still uses the
+  // full cloud. base <= 0 disables.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_far_disagree_min_range_meters)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_far_disagree_base_meters)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_far_disagree_per_meter)
+  // If rejected_far / far_returns >= this, skip the whole insert (bent sweep
+  // would still paint near hits into a multilayer wall). 0 disables.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_far_disagree_ratio)
   CARTOGRAPHER_OPTION_FIELD(PoseExtrapolatorOptions,
                             pose_extrapolator_options)
   CARTOGRAPHER_OPTION_FIELD(SubmapsOptions2D, submaps_options)

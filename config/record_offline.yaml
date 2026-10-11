@@ -95,6 +95,17 @@ trajectory_builder:
     skip_insert_half_scan_angular_search_window: 0.05
     skip_insert_half_scan_yaw_radians: 0.03
     skip_insert_half_scan_translation_meters: 0.06
+    # Insert-only horizon (matching still uses max_range 12 m). Cuts LD14
+    # flying returns that paint speckles past room walls into unknown space.
+    skip_insert_max_range_meters: 5.0
+    # Insert-only: drop far returns that conflict with the active submap
+    # (threshold = base + per_meter * R). Matching still uses the full cloud.
+    skip_insert_far_disagree_min_range_meters: 1.5
+    skip_insert_far_disagree_base_meters: 0.04
+    skip_insert_far_disagree_per_meter: 0.01
+    # Bent sweeps: if this many far hits are ghost rejects, skip whole insert
+    # so remaining near hits cannot thicken a parallel wall.
+    skip_insert_far_disagree_ratio: 0.22
     pose_extrapolator:
       constant_velocity:
         pose_queue_duration: 0.001

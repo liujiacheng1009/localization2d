@@ -253,6 +253,30 @@ LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
         parameter_dictionary->GetDouble(
             "skip_insert_half_scan_angular_search_window"));
   }
+  if (parameter_dictionary->HasKey("skip_insert_max_range_meters")) {
+    options.set_skip_insert_max_range_meters(
+        parameter_dictionary->GetDouble("skip_insert_max_range_meters"));
+  }
+  if (parameter_dictionary->HasKey(
+          "skip_insert_far_disagree_min_range_meters")) {
+    options.set_skip_insert_far_disagree_min_range_meters(
+        parameter_dictionary->GetDouble(
+            "skip_insert_far_disagree_min_range_meters"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_far_disagree_base_meters")) {
+    options.set_skip_insert_far_disagree_base_meters(
+        parameter_dictionary->GetDouble(
+            "skip_insert_far_disagree_base_meters"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_far_disagree_per_meter")) {
+    options.set_skip_insert_far_disagree_per_meter(
+        parameter_dictionary->GetDouble(
+            "skip_insert_far_disagree_per_meter"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_far_disagree_ratio")) {
+    options.set_skip_insert_far_disagree_ratio(
+        parameter_dictionary->GetDouble("skip_insert_far_disagree_ratio"));
+  }
   *options.mutable_pose_extrapolator_options() = CreatePoseExtrapolatorOptions(
       parameter_dictionary->GetDictionary("pose_extrapolator").get());
   *options.mutable_submaps_options() = CreateSubmapsOptions2D(

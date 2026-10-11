@@ -146,6 +146,13 @@ PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` �
 | `skip_insert_half_scan_angular_search_window` | 0.05 | 半圈专用 correlative 航向搜索窗（rad） |
 | `skip_insert_half_scan_yaw_radians` | 0.03 | early/late 半圈位姿航向差超过该值时不写入 |
 | `skip_insert_half_scan_translation_meters` | 0.06 | early/late 半圈位姿平移差超过该值时不写入（与航向为 OR） |
+| `skip_insert_max_range_meters` | 5.0 | 仅插图用的最远距离；更远回波不写入（`0` 关闭）。匹配仍用 `max_range` |
+| `skip_insert_far_disagree_min_range_meters` | 1.5 | 仅对距离 ≥ 该值的回波做射线残差滤除；近距仍全部写入 |
+| `skip_insert_far_disagree_base_meters` | 0.04 | 与射线上**第一堵墙**的允许距离差基数；`≤0` 关闭该滤除 |
+| `skip_insert_far_disagree_per_meter` | 0.01 | 允许残差随距离线性放宽：`base + per_meter · R` |
+| `skip_insert_far_disagree_ratio` | 0.22 | 远点中鬼影拒绝占比 ≥ 该值时整帧不插图（`0` 关闭；不含超插图最远的点） |
+
+目标是减少多层墙**写入**地图：点级丢掉鬼影带回波，帧级在弯扫上禁止整帧落图。匹配仍用完整点云；调试琥珀色仅供对照。
 
 仿真 / `datasets/exploration` / `iilabs3d_offline.yaml` 不得填写。Gazebo 的
 `time_increment == 0`，旋转去畸变不会启用；跳过写入会让探索原地转丢图。

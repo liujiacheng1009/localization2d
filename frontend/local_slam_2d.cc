@@ -464,14 +464,23 @@ LocalSlam2D::AddAccumulatedRangeData(
       half_scan_armed &&
       HalfScanPosesDisagree(*pose_estimate_2d, early_tracking_hits,
                             late_tracking_hits, &half_yaw, &half_translation);
-  const bool skip_insert = gap_skip || turning_skip || destort_skip ||
-                           peak_segment_skip || half_scan_skip;
   extrapolator_->AddPose(time, *pose_estimate_2d);
   has_range_pose_ = true;
 
   sensor::RangeData range_data_in_local =
       TransformRangeData(tracking_range_data,
                          transform::Embed3D(pose_estimate_2d->cast<float>()));
+  // Classify before the insert decision: point drops feed the ratio skip that
+  // blocks bent sweeps from painting multilayer walls with the remaining hits.
+  sensor::PointCloud rejected_insert_hits;
+  const sensor::RangeData insert_range =
+      FilterFarDisagreeingInsertHits(range_data_in_local, &rejected_insert_hits);
+  const bool far_disagree_skip =
+      FarDisagreeRatioSkipInsert(range_data_in_local, rejected_insert_hits);
+  const bool skip_insert = gap_skip || turning_skip || destort_skip ||
+                           peak_segment_skip || half_scan_skip ||
+                           far_disagree_skip;
+
   std::unique_ptr<InsertionResult> insertion_result;
   if (skip_insert) {
     LOG(INFO) << "Skipping submap insert gap=" << gap_seconds
@@ -481,28 +490,159 @@ LocalSlam2D::AddAccumulatedRangeData(
               << " peak_segment_yaw=" << peak_segment_yaw
               << " half_armed=" << half_scan_armed
               << " half_yaw=" << half_yaw
-              << " half_translation=" << half_translation;
+              << " half_translation=" << half_translation
+              << " far_disagree_skip=" << far_disagree_skip
+              << " far_rejected=" << rejected_insert_hits.size();
   } else {
     insertion_result = InsertIntoSubmap(
-        time, range_data_in_local, filtered_point_cloud,
-        *pose_estimate_2d);
+        time, insert_range, filtered_point_cloud, *pose_estimate_2d,
+        &rejected_insert_hits, /*apply_far_disagree_filter=*/false);
   }
 
-  return absl::make_unique<MatchingResult>(
-      MatchingResult{time, *pose_estimate_2d, std::move(range_data_in_local),
-                     std::move(insertion_result)});
+  MatchingResult result{time, *pose_estimate_2d, std::move(range_data_in_local),
+                        std::move(insertion_result)};
+  result.rejected_insert_hits = std::move(rejected_insert_hits);
+  return absl::make_unique<MatchingResult>(std::move(result));
+}
+
+sensor::RangeData LocalSlam2D::FilterFarDisagreeingInsertHits(
+    const sensor::RangeData& range_data_in_local,
+    sensor::PointCloud* rejected_hits) const {
+  CHECK(rejected_hits != nullptr);
+  *rejected_hits = sensor::PointCloud();
+  const double insert_max = options_.skip_insert_max_range_meters();
+  const double min_range = options_.skip_insert_far_disagree_min_range_meters();
+  const double base = options_.skip_insert_far_disagree_base_meters();
+  const double per_meter = options_.skip_insert_far_disagree_per_meter();
+  const bool disagree_enabled =
+      base > 0. && min_range > 0. && !active_submaps_.submaps().empty();
+  if (insert_max <= 0. && !disagree_enabled) {
+    return range_data_in_local;
+  }
+  const Grid2D* grid =
+      disagree_enabled ? active_submaps_.submaps().front()->grid() : nullptr;
+  const double resolution = grid != nullptr ? grid->limits().resolution() : 0.;
+  // Correspondence cost below this ≈ occupied (probability > ~0.52).
+  constexpr float kOccupiedCorrespondence = 0.48f;
+
+  sensor::RangeData filtered = range_data_in_local;
+  filtered.returns = sensor::PointCloud();
+  const Eigen::Vector2f origin = range_data_in_local.origin.head<2>();
+
+  for (const sensor::RangefinderPoint& hit : range_data_in_local.returns) {
+    const Eigen::Vector2f p = hit.position.head<2>();
+    const float range = (p - origin).norm();
+    // Hard insert horizon: drop flying far returns (do not paint, do not
+    // cast a long miss that would erode nearer walls).
+    if (insert_max > 0. && range > insert_max) {
+      rejected_hits->push_back(hit);
+      continue;
+    }
+    if (!disagree_enabled || range < min_range || range < 1e-3f) {
+      filtered.returns.push_back(hit);
+      continue;
+    }
+    const double threshold = base + per_meter * static_cast<double>(range);
+    // Ray residual vs the *first* occupied cell. Neighborhood search would
+    // "agree" with an already-painted ghost wall at the bad hit.
+    // Past the first wall inside the ghost band → drop (parallel multilayer).
+    // Larger gaps stay (doorway → next room). Short-of-wall ghosts in-band drop;
+    // much closer returns stay (real foreground objects / dynamics).
+    constexpr double kMaxGhostBandMeters = 0.45;
+    const Eigen::Vector2f dir = (p - origin) / range;
+    const double walk =
+        std::min(static_cast<double>(range) + kMaxGhostBandMeters, 12.0);
+    const int steps =
+        std::max(1, static_cast<int>(std::ceil(walk / resolution)));
+    bool found_wall = false;
+    double wall_range = 0.;
+    for (int i = 1; i <= steps; ++i) {
+      const double d = static_cast<double>(i) * resolution;
+      const Eigen::Vector2f q = origin + dir * static_cast<float>(d);
+      const Eigen::Array2i idx = grid->limits().GetCellIndex(q);
+      if (!grid->IsKnown(idx)) continue;
+      if (grid->GetCorrespondenceCost(idx) > kOccupiedCorrespondence) {
+        continue;
+      }
+      found_wall = true;
+      wall_range = d;
+      break;
+    }
+    if (!found_wall) {
+      filtered.returns.push_back(hit);
+      continue;
+    }
+    const double delta = static_cast<double>(range) - wall_range;
+    const bool agrees = std::abs(delta) <= threshold;
+    const bool behind_ghost =
+        delta > threshold && delta <= kMaxGhostBandMeters;
+    const bool short_ghost =
+        delta < -threshold && -delta <= kMaxGhostBandMeters;
+    if (agrees) {
+      filtered.returns.push_back(hit);
+    } else if (behind_ghost || short_ghost) {
+      rejected_hits->push_back(hit);
+    } else {
+      filtered.returns.push_back(hit);
+    }
+  }
+  return filtered;
+}
+
+bool LocalSlam2D::FarDisagreeRatioSkipInsert(
+    const sensor::RangeData& range_data_in_local,
+    const sensor::PointCloud& rejected_hits) const {
+  const double ratio = options_.skip_insert_far_disagree_ratio();
+  const double min_range = options_.skip_insert_far_disagree_min_range_meters();
+  const double insert_max = options_.skip_insert_max_range_meters();
+  if (ratio <= 0. || min_range <= 0. ||
+      options_.skip_insert_far_disagree_base_meters() <= 0.) {
+    return false;
+  }
+  const Eigen::Vector2f origin = range_data_in_local.origin.head<2>();
+  auto in_ratio_band = [&](const float range) {
+    if (range < min_range) return false;
+    if (insert_max > 0. && range > insert_max) return false;
+    return true;
+  };
+  int far = 0;
+  for (const sensor::RangefinderPoint& hit : range_data_in_local.returns) {
+    if (in_ratio_band((hit.position.head<2>() - origin).norm())) {
+      ++far;
+    }
+  }
+  if (far < 25) return false;
+  int rejected_in_band = 0;
+  for (const sensor::RangefinderPoint& hit : rejected_hits) {
+    if (in_ratio_band((hit.position.head<2>() - origin).norm())) {
+      ++rejected_in_band;
+    }
+  }
+  return static_cast<double>(rejected_in_band) >= ratio * far;
 }
 
 std::unique_ptr<LocalSlam2D::InsertionResult>
 LocalSlam2D::InsertIntoSubmap(
     const common::Time time, const sensor::RangeData& range_data_in_local,
     const sensor::PointCloud& filtered_point_cloud,
-    const transform::Rigid2d& pose_estimate) {
+    const transform::Rigid2d& pose_estimate,
+    sensor::PointCloud* rejected_insert_hits,
+    const bool apply_far_disagree_filter) {
   if (motion_filter_.IsSimilar(time, pose_estimate)) {
     return nullptr;
   }
+  sensor::PointCloud rejected_local;
+  sensor::PointCloud* rejected =
+      rejected_insert_hits != nullptr ? rejected_insert_hits : &rejected_local;
+  const sensor::RangeData insert_range =
+      apply_far_disagree_filter
+          ? FilterFarDisagreeingInsertHits(range_data_in_local, rejected)
+          : range_data_in_local;
+  if (insert_range.returns.empty()) {
+    return nullptr;
+  }
   std::vector<std::shared_ptr<const Submap2D>> insertion_submaps =
-      active_submaps_.InsertRangeData(range_data_in_local);
+      active_submaps_.InsertRangeData(insert_range);
   return absl::make_unique<InsertionResult>(InsertionResult{
       std::make_shared<const TrajectoryNode::Data>(TrajectoryNode::Data{
           time, filtered_point_cloud, pose_estimate}),
@@ -524,7 +664,8 @@ LocalSlam2D::CommitRelocalizedPose(
       tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
   LOG(INFO) << "Relocalized local pose to (" << local_pose.translation().x()
             << ", " << local_pose.translation().y() << ")";
-  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose);
+  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose,
+                          nullptr);
 }
 
 void LocalSlam2D::SetChassisTilt(const double tilt_radians) {
@@ -558,7 +699,8 @@ std::unique_ptr<LocalSlam2D::InsertionResult> LocalSlam2D::ResumeMapping(
   const sensor::RangeData range_data_in_local = TransformRangeData(
       tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
   LOG(INFO) << "Relocalization stayed at the held pose; mapping resumes";
-  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose);
+  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose,
+                          nullptr);
 }
 
 void LocalSlam2D::AddOdometryData(
