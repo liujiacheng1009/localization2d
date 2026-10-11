@@ -51,9 +51,9 @@ class LocalSlam2D {
     sensor::RangeData range_data_in_local;
     // 'nullptr' if dropped by the motion filter.
     std::unique_ptr<const InsertionResult> insertion_result;
-    // The chassis is being carried, or it was tilted and is level again.
-    // The returned pose is the last accepted one and nothing was inserted.
-    // A global search may run. An in-place spin is not this case.
+    // Chassis tilted/lifted, or scan match quality collapsed. The returned
+    // pose is the last accepted one and nothing was inserted. Frontend may
+    // run global Relocalize. An in-place spin is not this case.
     bool tracking_lost = false;
     sensor::PointCloud lost_cloud;
     sensor::RangeData tracking_range_data;
@@ -127,6 +127,9 @@ class LocalSlam2D {
   bool FarDisagreeRatioSkipInsert(
       const sensor::RangeData& range_data_in_local,
       const sensor::PointCloud& rejected_hits) const;
+  // Fraction of mid-range returns near occupied cells at 'local_pose'.
+  double MatchAgreeRatio(const transform::Rigid2d& local_pose,
+                         const sensor::PointCloud& tracking_hits) const;
 
   // Scan matches 'filtered_point_cloud' and returns the
   // observed pose, or nullptr on failure.
@@ -152,11 +155,13 @@ class LocalSlam2D {
   std::unique_ptr<PoseExtrapolator> extrapolator_;
   std::deque<sensor::OdometryData> pending_odometry_data_;
   bool has_range_pose_ = false;
-  // Latched while the chassis is tilted or lifted. Cleared only after a
-  // level scan relocalizes, either by staying or by jumping.
+  // Latched while the chassis is tilted/lifted or match quality is lost.
+  // Cleared only after Relocalize stays or jumps.
   bool suspended_ = false;
   std::atomic<double> chassis_tilt_{0.};
   common::Time tilt_high_since_ = common::Time::min();
+  // Consecutive frames with poor match agree/score before latching LOST.
+  int bad_match_streak_ = 0;
   // Half-scan runs only while time <= this (armed by recent turn signals).
   common::Time half_scan_armed_until_ = common::Time::min();
 

@@ -151,6 +151,11 @@ PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` �
 | `skip_insert_far_disagree_base_meters` | 0.04 | 与射线上**第一堵墙**的允许距离差基数；`≤0` 关闭该滤除 |
 | `skip_insert_far_disagree_per_meter` | 0.01 | 允许残差随距离线性放宽：`base + per_meter · R` |
 | `skip_insert_far_disagree_ratio` | 0.22 | 远点中鬼影拒绝占比 ≥ 该值时整帧不插图（`0` 关闭；不含超插图最远的点） |
+| `tracking_min_match_agree_ratio` | 0.35 | 匹配后中距回波落在占据邻域的比例低于该值视为差匹配（`0` 关闭） |
+| `tracking_min_correlative_score` | 0 | correlative 分数门槛；仅当一致率也偏低时参与判 LOST（`0` 关闭） |
+| `tracking_bad_match_frames` | 3 | 连续差匹配帧数达到后进入 LOST，触发全局 `Relocalize` |
+
+差匹配时先用轮速预测、不插图；连续超限则保持末位姿并走已有重定位。插图滤除只挡写图，不负责把错位姿拉回。
 
 目标是减少多层墙**写入**地图：点级丢掉鬼影带回波，帧级在弯扫上禁止整帧落图。匹配仍用完整点云；调试琥珀色仅供对照。
 

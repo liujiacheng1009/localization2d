@@ -77,7 +77,9 @@ void Frontend2D::ProcessSensorData(
          common::ToSeconds(matching_result->time - last_relocalize_attempt_) >
              0.5);
     if (lost_holds_ == 1 || lost_holds_ % 10 == 0) {
-      LOG(INFO) << "Holding pose after a lift or tilt. holds=" << lost_holds_;
+      LOG(INFO) << "Holding pose (tilt/lift or poor match); "
+                   "relocalization holds="
+                << lost_holds_;
     }
     if (due) {
       last_relocalize_attempt_ = matching_result->time;

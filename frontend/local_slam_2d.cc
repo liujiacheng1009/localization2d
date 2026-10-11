@@ -387,6 +387,49 @@ LocalSlam2D::AddAccumulatedRangeData(
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
+
+  // Match-quality gate: a wrong local minimum still returns a pose. When the
+  // cloud no longer agrees with the active submap (and/or correlative score
+  // is low), do not keep integrating that pose — hold and ask for Relocalize.
+  const double min_agree = options_.tracking_min_match_agree_ratio();
+  const double min_score = options_.tracking_min_correlative_score();
+  const bool quality_enabled = min_agree > 0. || min_score > 0.;
+  const double agree_ratio =
+      quality_enabled ? MatchAgreeRatio(*pose_estimate_2d, filtered_point_cloud)
+                      : 1.;
+  const int bad_frames = options_.tracking_bad_match_frames() > 0
+                             ? options_.tracking_bad_match_frames()
+                             : 3;
+  const bool agree_bad = min_agree > 0. && agree_ratio < min_agree;
+  // Optional score reinforcement: only when agree is already below the floor.
+  const bool score_bad = min_score > 0. && correlative_score >= 0. &&
+                         correlative_score < min_score && agree_bad;
+  if (has_range_pose_ && quality_enabled && agree_bad) {
+    ++bad_match_streak_;
+    LOG_EVERY_N(WARNING, 5)
+        << "Poor scan match agree=" << agree_ratio << " score="
+        << correlative_score << " streak=" << bad_match_streak_
+        << (score_bad ? " (low score)" : "");
+    if (bad_match_streak_ >= bad_frames) {
+      suspended_ = true;
+      LOG(WARNING) << "Tracking lost on match quality; holding pose for "
+                      "relocalization agree="
+                   << agree_ratio << " score=" << correlative_score;
+      return HoldLastPose(time, tracking_range_data, filtered_point_cloud,
+                          /*relocalize=*/true);
+    }
+    // Soft: trust wheels this frame, do not paint, do not latch LOST yet.
+    extrapolator_->AddPose(time, pose_prediction);
+    has_range_pose_ = true;
+    sensor::RangeData held_range = TransformRangeData(
+        tracking_range_data,
+        transform::Embed3D(pose_prediction.cast<float>()));
+    MatchingResult result{time, pose_prediction, std::move(held_range),
+                          nullptr};
+    return absl::make_unique<MatchingResult>(std::move(result));
+  }
+  bad_match_streak_ = 0;
+
   // The local correlative window can occasionally choose a nearby wall
   // fragment. Compare that displacement with wheel odometry before accepting
   // it; only a high-confidence, bounded laser match may override a stale
@@ -589,6 +632,47 @@ sensor::RangeData LocalSlam2D::FilterFarDisagreeingInsertHits(
   return filtered;
 }
 
+double LocalSlam2D::MatchAgreeRatio(
+    const transform::Rigid2d& local_pose,
+    const sensor::PointCloud& tracking_hits) const {
+  if (active_submaps_.submaps().empty() || tracking_hits.empty()) {
+    return 1.;
+  }
+  const Grid2D& grid = *active_submaps_.submaps().front()->grid();
+  const double resolution = grid.limits().resolution();
+  constexpr float kOccupiedCorrespondence = 0.48f;
+  // Tight radius: a 0.12 m disk still "agrees" with thick/multilayer walls
+  // when the pose is visibly wrong. ~2 cells @ 3 cm catches true matches.
+  constexpr double kAgreeRadius = 0.06;
+  const int rad =
+      std::max(1, static_cast<int>(std::ceil(kAgreeRadius / resolution)));
+  int considered = 0;
+  int agrees = 0;
+  for (const sensor::RangefinderPoint& hit : tracking_hits) {
+    const float range = hit.position.head<2>().norm();
+    if (range < 0.5f || range > 5.0f) continue;
+    ++considered;
+    const Eigen::Vector2f local =
+        (local_pose.cast<float>() * hit.position.head<2>());
+    const Eigen::Array2i center = grid.limits().GetCellIndex(local);
+    bool ok = false;
+    for (int dy = -rad; dy <= rad && !ok; ++dy) {
+      for (int dx = -rad; dx <= rad; ++dx) {
+        if (dx * dx + dy * dy > rad * rad + rad) continue;
+        const Eigen::Array2i idx(center.x() + dx, center.y() + dy);
+        if (!grid.IsKnown(idx)) continue;
+        if (grid.GetCorrespondenceCost(idx) <= kOccupiedCorrespondence) {
+          ok = true;
+          break;
+        }
+      }
+    }
+    if (ok) ++agrees;
+  }
+  if (considered < 25) return 1.;
+  return static_cast<double>(agrees) / static_cast<double>(considered);
+}
+
 bool LocalSlam2D::FarDisagreeRatioSkipInsert(
     const sensor::RangeData& range_data_in_local,
     const sensor::PointCloud& rejected_hits) const {
@@ -655,6 +739,7 @@ LocalSlam2D::CommitRelocalizedPose(
     const sensor::RangeData& tracking_range_data) {
   CHECK(extrapolator_ != nullptr);
   suspended_ = false;
+  bad_match_streak_ = 0;
   extrapolator_->AddPose(time, local_pose);
   has_range_pose_ = true;
   active_submaps_.ReplaceWithNewOrigin(local_pose.translation().cast<float>());
@@ -692,6 +777,7 @@ std::unique_ptr<LocalSlam2D::InsertionResult> LocalSlam2D::ResumeMapping(
     const sensor::RangeData& tracking_range_data) {
   CHECK(extrapolator_ != nullptr);
   suspended_ = false;
+  bad_match_streak_ = 0;
   extrapolator_->AddPose(time, local_pose);
   has_range_pose_ = true;
   const sensor::PointCloud filtered = sensor::AdaptiveVoxelFilter(

@@ -175,6 +175,14 @@ struct LocalTrajectoryBuilderOptions2D {
   // If rejected_far / far_returns >= this, skip the whole insert (bent sweep
   // would still paint near hits into a multilayer wall). 0 disables.
   CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_far_disagree_ratio)
+  // Tracking quality: fraction of mid-range returns that land near occupied
+  // cells after scan match. Below this for tracking_bad_match_frames → LOST
+  // and global Relocalize. 0 disables.
+  CARTOGRAPHER_OPTION_SCALAR(double, tracking_min_match_agree_ratio)
+  // Optional correlative score floor (online correlative only). 0 disables.
+  CARTOGRAPHER_OPTION_SCALAR(double, tracking_min_correlative_score)
+  // Consecutive bad-match frames before latching LOST / holding pose.
+  CARTOGRAPHER_OPTION_SCALAR(int, tracking_bad_match_frames)
   CARTOGRAPHER_OPTION_FIELD(PoseExtrapolatorOptions,
                             pose_extrapolator_options)
   CARTOGRAPHER_OPTION_FIELD(SubmapsOptions2D, submaps_options)

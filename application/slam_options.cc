@@ -277,6 +277,18 @@ LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
     options.set_skip_insert_far_disagree_ratio(
         parameter_dictionary->GetDouble("skip_insert_far_disagree_ratio"));
   }
+  if (parameter_dictionary->HasKey("tracking_min_match_agree_ratio")) {
+    options.set_tracking_min_match_agree_ratio(
+        parameter_dictionary->GetDouble("tracking_min_match_agree_ratio"));
+  }
+  if (parameter_dictionary->HasKey("tracking_min_correlative_score")) {
+    options.set_tracking_min_correlative_score(
+        parameter_dictionary->GetDouble("tracking_min_correlative_score"));
+  }
+  if (parameter_dictionary->HasKey("tracking_bad_match_frames")) {
+    options.set_tracking_bad_match_frames(
+        parameter_dictionary->GetInt("tracking_bad_match_frames"));
+  }
   *options.mutable_pose_extrapolator_options() = CreatePoseExtrapolatorOptions(
       parameter_dictionary->GetDictionary("pose_extrapolator").get());
   *options.mutable_submaps_options() = CreateSubmapsOptions2D(
