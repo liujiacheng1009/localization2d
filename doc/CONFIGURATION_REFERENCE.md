@@ -147,10 +147,10 @@ PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` �
 | `skip_insert_half_scan_yaw_radians` | 0.03 | early/late 半圈位姿航向差超过该值时不写入 |
 | `skip_insert_half_scan_translation_meters` | 0.06 | early/late 半圈位姿平移差超过该值时不写入（与航向为 OR） |
 | `skip_insert_max_range_meters` | 5.0 | 仅插图用的最远距离；更远回波不写入（`0` 关闭）。匹配仍用 `max_range` |
-| `skip_insert_far_disagree_min_range_meters` | 1.5 | 仅对距离 ≥ 该值的回波做射线残差滤除；近距仍全部写入 |
+| `skip_insert_far_disagree_min_range_meters` | 0.8 | 仅对距离 ≥ 该值的回波做射线残差滤除（含近墙畸变段） |
 | `skip_insert_far_disagree_base_meters` | 0.04 | 与射线上**第一堵墙**的允许距离差基数；`≤0` 关闭该滤除 |
 | `skip_insert_far_disagree_per_meter` | 0.01 | 允许残差随距离线性放宽：`base + per_meter · R` |
-| `skip_insert_far_disagree_ratio` | 0.22 | 远点中鬼影拒绝占比 ≥ 该值时整帧不插图（`0` 关闭；不含超插图最远的点） |
+| `skip_insert_far_disagree_ratio` | 0.15 | 带内鬼影拒绝占比 ≥ 该值时整帧不插图（`0` 关闭；不含超插图最远的点） |
 | `tracking_min_match_agree_ratio` | 0.35 | 匹配后中距回波落在占据邻域的比例低于该值视为差匹配（`0` 关闭） |
 | `tracking_min_correlative_score` | 0 | correlative 分数门槛；仅当一致率也偏低时参与判 LOST（`0` 关闭） |
 | `tracking_bad_match_frames` | 3 | 连续差匹配帧数达到后进入 LOST，触发全局 `Relocalize` |

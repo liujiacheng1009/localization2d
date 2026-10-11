@@ -100,12 +100,14 @@ trajectory_builder:
     skip_insert_max_range_meters: 5.0
     # Insert-only: drop far returns that conflict with the active submap
     # (threshold = base + per_meter * R). Matching still uses the full cloud.
-    skip_insert_far_disagree_min_range_meters: 1.5
+    # LD14 deskew leaves non-rigid bend even when match looks OK; cover near
+    # walls too (red-box multilayer is often 0.8–2 m, not only far beams).
+    skip_insert_far_disagree_min_range_meters: 0.8
     skip_insert_far_disagree_base_meters: 0.04
     skip_insert_far_disagree_per_meter: 0.01
-    # Bent sweeps: if this many far hits are ghost rejects, skip whole insert
-    # so remaining near hits cannot thicken a parallel wall.
-    skip_insert_far_disagree_ratio: 0.22
+    # Bent sweeps: if this many band hits are ghost rejects, skip whole insert
+    # so remaining hits cannot thicken a parallel wall.
+    skip_insert_far_disagree_ratio: 0.15
     # Match-quality LOST → Frontend Relocalize (global search). Catches wrong
     # local minima where the pose drifts far from the map.
     tracking_min_match_agree_ratio: 0.35
