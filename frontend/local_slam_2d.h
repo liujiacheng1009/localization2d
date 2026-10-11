@@ -95,7 +95,17 @@ class LocalSlam2D {
       common::Time time, const sensor::RangeData& tracking_range_data,
       const sensor::PointCloud& filtered_point_cloud, bool relocalize);
   std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
-      common::Time time, const sensor::RangeData& tracking_range_data);
+      common::Time time, const sensor::RangeData& tracking_range_data,
+      double destort_yaw, double peak_segment_yaw,
+      const sensor::PointCloud& early_tracking_hits,
+      const sensor::PointCloud& late_tracking_hits);
+  bool HalfScanPosesDisagree(const transform::Rigid2d& pose_estimate,
+                             const sensor::PointCloud& early_tracking_hits,
+                             const sensor::PointCloud& late_tracking_hits,
+                             double* half_yaw, double* half_translation) const;
+  bool HalfScanArmed(common::Time time, double odom_interval_yaw,
+                     double matched_interval_yaw, double abs_destort_yaw,
+                     double peak_segment_yaw);
   sensor::RangeData TransformToCurrentTrackingFrameAndFilter(
       const transform::Rigid3f& transform_to_current_tracking_frame,
       const sensor::RangeData& range_data) const;
@@ -120,6 +130,9 @@ class LocalSlam2D {
   MotionFilter motion_filter_;
   scan_matching::RealTimeCorrelativeScanMatcher2D
       real_time_correlative_scan_matcher_;
+  // Narrow-window correlative matcher used only for post-turn half-scan checks.
+  scan_matching::RealTimeCorrelativeScanMatcher2D
+      half_scan_correlative_scan_matcher_;
   scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
 
   std::unique_ptr<PoseExtrapolator> extrapolator_;
@@ -130,9 +143,13 @@ class LocalSlam2D {
   bool suspended_ = false;
   std::atomic<double> chassis_tilt_{0.};
   common::Time tilt_high_since_ = common::Time::min();
+  // Half-scan runs only while time <= this (armed by recent turn signals).
+  common::Time half_scan_armed_until_ = common::Time::min();
 
   int num_accumulated_ = 0;
   sensor::RangeData accumulated_range_data_;
+  // Relative beam times (seconds, <= 0) parallel to accumulated returns only.
+  std::vector<float> accumulated_hit_times_;
 
   const std::string expected_range_sensor_id_;
 };

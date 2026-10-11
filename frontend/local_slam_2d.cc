@@ -21,6 +21,7 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <vector>
 
 #include "absl/memory/memory.h"
 #include "cartographer/foundation/sensor_data.h"
@@ -35,6 +36,66 @@ namespace {
 constexpr double kTiltEnterRadians = 12. * std::numbers::pi / 180.;
 constexpr double kTiltExitRadians = 6. * std::numbers::pi / 180.;
 
+// Largest |yaw| of TrackingMotion over any intra-scan window of
+// `window_seconds`. Partial bend often comes from a short fast turn inside
+// the sweep, while first→last destort_yaw stays modest.
+double PeakSegmentYaw(const PoseExtrapolator& extrapolator,
+                      const common::Time end_time,
+                      const sensor::TimedPointCloud& ranges,
+                      const double window_seconds) {
+  if (ranges.size() < 2 || window_seconds <= 0.) {
+    return 0.;
+  }
+  const size_t step =
+      std::max<size_t>(1, ranges.size() / 64);  // ~64 samples across the sweep
+  std::vector<size_t> indices;
+  indices.reserve(64);
+  for (size_t i = 0; i < ranges.size(); i += step) {
+    indices.push_back(i);
+  }
+  if (indices.back() != ranges.size() - 1) {
+    indices.push_back(ranges.size() - 1);
+  }
+
+  double peak = 0.;
+  size_t j = 0;
+  for (size_t a = 0; a < indices.size(); ++a) {
+    const float rel_a = ranges[indices[a]].time;
+    if (j < a) {
+      j = a;
+    }
+    while (j + 1 < indices.size() &&
+           ranges[indices[j]].time - rel_a < window_seconds) {
+      ++j;
+    }
+    if (j >= indices.size() ||
+        ranges[indices[j]].time - rel_a < window_seconds) {
+      break;
+    }
+    const common::Time t_a = end_time + common::FromSeconds(rel_a);
+    const common::Time t_b =
+        end_time + common::FromSeconds(ranges[indices[j]].time);
+    peak = std::max(
+        peak, std::abs(transform::Yaw(extrapolator.TrackingMotion(t_a, t_b))));
+  }
+  return peak;
+}
+
+RealTimeCorrelativeScanMatcherOptions2D HalfScanMatcherOptions(
+    const LocalTrajectoryBuilderOptions2D& options) {
+  RealTimeCorrelativeScanMatcherOptions2D half =
+      options.real_time_correlative_scan_matcher_options();
+  if (options.skip_insert_half_scan_linear_search_window() > 0.) {
+    half.set_linear_search_window(
+        options.skip_insert_half_scan_linear_search_window());
+  }
+  if (options.skip_insert_half_scan_angular_search_window() > 0.) {
+    half.set_angular_search_window(
+        options.skip_insert_half_scan_angular_search_window());
+  }
+  return half;
+}
+
 }  // namespace
 
 LocalSlam2D::LocalSlam2D(
@@ -45,6 +106,7 @@ LocalSlam2D::LocalSlam2D(
       motion_filter_(options_.motion_filter_options()),
       real_time_correlative_scan_matcher_(
           options_.real_time_correlative_scan_matcher_options()),
+      half_scan_correlative_scan_matcher_(HalfScanMatcherOptions(options)),
       ceres_scan_matcher_(options_.ceres_scan_matcher_options()),
       expected_range_sensor_id_(std::move(expected_range_sensor_id)) {}
 
@@ -114,13 +176,20 @@ LocalSlam2D::AddRangeData(
   // from odometry over this sweep (constant-twist fallback), not from clamping
   // early beams to the last SLAM pose.
   const transform::Rigid2d pose_at_end = extrapolator_->ExtrapolatePose(time);
+  double destort_yaw = 0.;
+  const double peak_window = options_.skip_insert_peak_segment_seconds();
+  const double peak_segment_yaw =
+      PeakSegmentYaw(*extrapolator_, time, range_data.ranges, peak_window);
   if (std::abs(range_data.ranges.front().time) > 1e-4) {
     const transform::Rigid2d first_in_end = extrapolator_->TrackingMotion(
         time + common::FromSeconds(range_data.ranges.front().time), time);
-    const double destort_yaw = transform::Yaw(first_in_end);
-    if (std::abs(destort_yaw) > 0.08) {
+    destort_yaw = transform::Yaw(first_in_end);
+    if (std::abs(destort_yaw) > 0.08 ||
+        (peak_window > 0. && peak_segment_yaw > 0.05)) {
       LOG(INFO) << "Scan destortion yaw=" << destort_yaw << " rad over "
-                << -range_data.ranges.front().time << " s";
+                << -range_data.ranges.front().time
+                << " s peak_segment_yaw=" << peak_segment_yaw << " rad in "
+                << peak_window << " s";
     }
   }
 
@@ -138,6 +207,7 @@ LocalSlam2D::AddRangeData(
     // 'accumulated_range_data_.origin' is uninitialized until the last
     // accumulation.
     accumulated_range_data_ = sensor::RangeData{{}, {}, {}};
+    accumulated_hit_times_.clear();
   }
 
   // Drop any returns below the minimum range and convert returns beyond the
@@ -153,6 +223,7 @@ LocalSlam2D::AddRangeData(
     if (range >= options_.min_range()) {
       if (range <= options_.max_range()) {
         accumulated_range_data_.returns.push_back(hit_in_local);
+        accumulated_hit_times_.push_back(hit.time);
       } else {
         hit_in_local.position =
             origin_in_local +
@@ -168,17 +239,100 @@ LocalSlam2D::AddRangeData(
     // TODO(gaschler): This assumes that 'range_data_poses.back()' is at time
     // 'time'.
     accumulated_range_data_.origin = range_data_poses.back().translation();
+    const transform::Rigid3f to_tracking = range_data_poses.back().inverse();
+    sensor::PointCloud early_tracking_hits;
+    sensor::PointCloud late_tracking_hits;
+    CHECK_EQ(accumulated_range_data_.returns.size(),
+             accumulated_hit_times_.size());
+    if (!accumulated_hit_times_.empty()) {
+      std::vector<float> sorted_times = accumulated_hit_times_;
+      std::nth_element(sorted_times.begin(),
+                       sorted_times.begin() + sorted_times.size() / 2,
+                       sorted_times.end());
+      const float median_time = sorted_times[sorted_times.size() / 2];
+      for (size_t i = 0; i < accumulated_range_data_.returns.size(); ++i) {
+        const sensor::RangefinderPoint in_tracking =
+            to_tracking * accumulated_range_data_.returns[i];
+        if (accumulated_hit_times_[i] <= median_time) {
+          early_tracking_hits.push_back(in_tracking);
+        } else {
+          late_tracking_hits.push_back(in_tracking);
+        }
+      }
+      early_tracking_hits = sensor::VoxelFilter(
+          early_tracking_hits, options_.voxel_filter_size());
+      late_tracking_hits = sensor::VoxelFilter(
+          late_tracking_hits, options_.voxel_filter_size());
+    }
+    accumulated_hit_times_.clear();
     return AddAccumulatedRangeData(
         time,
         TransformToCurrentTrackingFrameAndFilter(
-            range_data_poses.back().inverse(), accumulated_range_data_));
+            to_tracking, accumulated_range_data_),
+        destort_yaw, peak_segment_yaw, early_tracking_hits,
+        late_tracking_hits);
   }
   return nullptr;
 }
 
+bool LocalSlam2D::HalfScanArmed(const common::Time time,
+                                const double odom_interval_yaw,
+                                const double matched_interval_yaw,
+                                const double abs_destort_yaw,
+                                const double peak_segment_yaw) {
+  const double after_s = options_.skip_insert_half_scan_after_turn_seconds();
+  const double arm_yaw = options_.skip_insert_half_scan_arm_yaw_radians();
+  // Disabled when either arming knob is unset.
+  if (after_s <= 0. || arm_yaw <= 0.) {
+    return false;
+  }
+  const double signal = std::max(std::max(odom_interval_yaw, matched_interval_yaw),
+                                 std::max(abs_destort_yaw, peak_segment_yaw));
+  if (signal > arm_yaw) {
+    half_scan_armed_until_ = time + common::FromSeconds(after_s);
+  }
+  return time <= half_scan_armed_until_;
+}
+
+bool LocalSlam2D::HalfScanPosesDisagree(
+    const transform::Rigid2d& pose_estimate,
+    const sensor::PointCloud& early_tracking_hits,
+    const sensor::PointCloud& late_tracking_hits, double* half_yaw,
+    double* half_translation) const {
+  CHECK(half_yaw != nullptr);
+  CHECK(half_translation != nullptr);
+  *half_yaw = 0.;
+  *half_translation = 0.;
+  const double yaw_limit = options_.skip_insert_half_scan_yaw_radians();
+  const double translation_limit =
+      options_.skip_insert_half_scan_translation_meters();
+  if ((yaw_limit <= 0. && translation_limit <= 0.) ||
+      early_tracking_hits.size() < 30 || late_tracking_hits.size() < 30 ||
+      active_submaps_.submaps().empty()) {
+    return false;
+  }
+  const Grid2D& grid = *active_submaps_.submaps().front()->grid();
+  transform::Rigid2d pose_early = pose_estimate;
+  transform::Rigid2d pose_late = pose_estimate;
+  half_scan_correlative_scan_matcher_.Match(
+      pose_estimate, early_tracking_hits, grid, &pose_early);
+  half_scan_correlative_scan_matcher_.Match(
+      pose_estimate, late_tracking_hits, grid, &pose_late);
+  const transform::Rigid2d late_from_early = pose_early.inverse() * pose_late;
+  *half_yaw = std::abs(transform::Yaw(late_from_early));
+  *half_translation = late_from_early.translation().norm();
+  // OR on purpose: requiring both under-triggers once multilayer ghosts are
+  // already in the submap (both halves lock onto the same wrong wall).
+  return (yaw_limit > 0. && *half_yaw > yaw_limit) ||
+         (translation_limit > 0. && *half_translation > translation_limit);
+}
+
 std::unique_ptr<LocalSlam2D::MatchingResult>
 LocalSlam2D::AddAccumulatedRangeData(
-    const common::Time time, const sensor::RangeData& tracking_range_data) {
+    const common::Time time, const sensor::RangeData& tracking_range_data,
+    const double destort_yaw, const double peak_segment_yaw,
+    const sensor::PointCloud& early_tracking_hits,
+    const sensor::PointCloud& late_tracking_hits) {
   if (tracking_range_data.returns.empty()) {
     LOG(WARNING) << "Dropped empty horizontal range data.";
     return nullptr;
@@ -292,7 +446,26 @@ LocalSlam2D::AddAccumulatedRangeData(
       turning_limit > 0. &&
       (odom_interval_yaw > turning_limit ||
        matched_interval_yaw > turning_limit);
-  const bool skip_insert = gap_skip || turning_skip;
+  const double destort_limit = options_.skip_insert_destort_yaw_radians();
+  const double abs_destort_yaw = std::abs(destort_yaw);
+  const bool destort_skip =
+      destort_limit > 0. && abs_destort_yaw > destort_limit;
+  const double peak_yaw_limit =
+      options_.skip_insert_peak_segment_yaw_radians();
+  const bool peak_segment_skip =
+      options_.skip_insert_peak_segment_seconds() > 0. &&
+      peak_yaw_limit > 0. && peak_segment_yaw > peak_yaw_limit;
+  double half_yaw = 0.;
+  double half_translation = 0.;
+  const bool half_scan_armed =
+      HalfScanArmed(time, odom_interval_yaw, matched_interval_yaw,
+                    abs_destort_yaw, peak_segment_yaw);
+  const bool half_scan_skip =
+      half_scan_armed &&
+      HalfScanPosesDisagree(*pose_estimate_2d, early_tracking_hits,
+                            late_tracking_hits, &half_yaw, &half_translation);
+  const bool skip_insert = gap_skip || turning_skip || destort_skip ||
+                           peak_segment_skip || half_scan_skip;
   extrapolator_->AddPose(time, *pose_estimate_2d);
   has_range_pose_ = true;
 
@@ -303,7 +476,12 @@ LocalSlam2D::AddAccumulatedRangeData(
   if (skip_insert) {
     LOG(INFO) << "Skipping submap insert gap=" << gap_seconds
               << "s odom_yaw=" << odom_interval_yaw
-              << " matched_yaw=" << matched_interval_yaw;
+              << " matched_yaw=" << matched_interval_yaw
+              << " destort_yaw=" << abs_destort_yaw
+              << " peak_segment_yaw=" << peak_segment_yaw
+              << " half_armed=" << half_scan_armed
+              << " half_yaw=" << half_yaw
+              << " half_translation=" << half_translation;
   } else {
     insertion_result = InsertIntoSubmap(
         time, range_data_in_local, filtered_point_cloud,

@@ -80,6 +80,21 @@ trajectory_builder:
     # LD14-only. Omit on Gazebo / exploration; default 0 means always insert.
     skip_insert_after_gap_seconds: 0.25
     skip_insert_while_turning_radians: 0.06
+    # Intra-scan yaw from first to last beam. Match but do not paint when the
+    # sweep still destorts after deskew (avoids multilayer walls on turns).
+    skip_insert_destort_yaw_radians: 0.08
+    # Peak |yaw| inside any 80 ms of the sweep. Partial bend often has a short
+    # fast turn while first→last destort_yaw stays small (~0.03).
+    skip_insert_peak_segment_seconds: 0.08
+    skip_insert_peak_segment_yaw_radians: 0.05
+    # Post-turn residual bend only: arm when any yaw signal > 0.06 (same as
+    # turning gate), keep armed 1 s, narrow correlative (~1/15 of online cost).
+    skip_insert_half_scan_arm_yaw_radians: 0.06
+    skip_insert_half_scan_after_turn_seconds: 1.0
+    skip_insert_half_scan_linear_search_window: 0.09
+    skip_insert_half_scan_angular_search_window: 0.05
+    skip_insert_half_scan_yaw_radians: 0.03
+    skip_insert_half_scan_translation_meters: 0.06
     pose_extrapolator:
       constant_velocity:
         pose_queue_duration: 0.001

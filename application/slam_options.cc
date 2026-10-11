@@ -207,6 +207,52 @@ LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
     options.set_skip_insert_while_turning_radians(
         parameter_dictionary->GetDouble("skip_insert_while_turning_radians"));
   }
+  if (parameter_dictionary->HasKey("skip_insert_destort_yaw_radians")) {
+    options.set_skip_insert_destort_yaw_radians(
+        parameter_dictionary->GetDouble("skip_insert_destort_yaw_radians"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_peak_segment_seconds")) {
+    options.set_skip_insert_peak_segment_seconds(
+        parameter_dictionary->GetDouble("skip_insert_peak_segment_seconds"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_peak_segment_yaw_radians")) {
+    options.set_skip_insert_peak_segment_yaw_radians(
+        parameter_dictionary->GetDouble(
+            "skip_insert_peak_segment_yaw_radians"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_half_scan_yaw_radians")) {
+    options.set_skip_insert_half_scan_yaw_radians(
+        parameter_dictionary->GetDouble("skip_insert_half_scan_yaw_radians"));
+  }
+  if (parameter_dictionary->HasKey(
+          "skip_insert_half_scan_translation_meters")) {
+    options.set_skip_insert_half_scan_translation_meters(
+        parameter_dictionary->GetDouble(
+            "skip_insert_half_scan_translation_meters"));
+  }
+  if (parameter_dictionary->HasKey("skip_insert_half_scan_arm_yaw_radians")) {
+    options.set_skip_insert_half_scan_arm_yaw_radians(
+        parameter_dictionary->GetDouble(
+            "skip_insert_half_scan_arm_yaw_radians"));
+  }
+  if (parameter_dictionary->HasKey(
+          "skip_insert_half_scan_after_turn_seconds")) {
+    options.set_skip_insert_half_scan_after_turn_seconds(
+        parameter_dictionary->GetDouble(
+            "skip_insert_half_scan_after_turn_seconds"));
+  }
+  if (parameter_dictionary->HasKey(
+          "skip_insert_half_scan_linear_search_window")) {
+    options.set_skip_insert_half_scan_linear_search_window(
+        parameter_dictionary->GetDouble(
+            "skip_insert_half_scan_linear_search_window"));
+  }
+  if (parameter_dictionary->HasKey(
+          "skip_insert_half_scan_angular_search_window")) {
+    options.set_skip_insert_half_scan_angular_search_window(
+        parameter_dictionary->GetDouble(
+            "skip_insert_half_scan_angular_search_window"));
+  }
   *options.mutable_pose_extrapolator_options() = CreatePoseExtrapolatorOptions(
       parameter_dictionary->GetDictionary("pose_extrapolator").get());
   *options.mutable_submaps_options() = CreateSubmapsOptions2D(

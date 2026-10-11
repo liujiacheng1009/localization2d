@@ -141,6 +141,29 @@ struct LocalTrajectoryBuilderOptions2D {
   CARTOGRAPHER_OPTION_FIELD(MotionFilterOptions, motion_filter_options)
   CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_after_gap_seconds)
   CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_while_turning_radians)
+  // Absolute intra-scan yaw from first to last beam (odometry deskew).
+  // 0 disables. LD14 default is 0.08 rad when set in record_offline.yaml.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_destort_yaw_radians)
+  // Peak |yaw| of odometry over any intra-scan window of this length. Catches
+  // a fast turn that only bends part of the sweep when first→last destort is
+  // still small. 0 window or 0 yaw limit disables.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_peak_segment_seconds)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_peak_segment_yaw_radians)
+  // After the full-scan match, match the early/late temporal halves of the
+  // sweep independently. Skip insert when the two half poses disagree by more
+  // than these limits (0 disables). Intended only in a post-turn window.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_half_scan_yaw_radians)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_half_scan_translation_meters)
+  // Soft-arm half-scan when odom/matched/destort/peak yaw exceeds this; keep
+  // armed for this many seconds after the last arming signal. 0 disables the
+  // half-scan gate entirely (never runs).
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_half_scan_arm_yaw_radians)
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_half_scan_after_turn_seconds)
+  // Tight correlative window for half-scan only (cheaper than the online
+  // matcher). 0 falls back to the online real_time_correlative windows.
+  CARTOGRAPHER_OPTION_SCALAR(double, skip_insert_half_scan_linear_search_window)
+  CARTOGRAPHER_OPTION_SCALAR(double,
+                             skip_insert_half_scan_angular_search_window)
   CARTOGRAPHER_OPTION_FIELD(PoseExtrapolatorOptions,
                             pose_extrapolator_options)
   CARTOGRAPHER_OPTION_FIELD(SubmapsOptions2D, submaps_options)

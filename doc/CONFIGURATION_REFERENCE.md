@@ -131,12 +131,21 @@ PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` �
 
 ### `skip_insert_*`（仅真机 LD14）
 
-这两个字段默认 `0`（未写出即关闭）。只应出现在 `config/record_offline.yaml`：
+这些字段默认 `0`（未写出即关闭）。只应出现在 `config/record_offline.yaml`：
 
 | 参数 | record 值 | 说明 |
 |---|---:|---|
-| `skip_insert_after_gap_seconds` | 0.25 | 相邻有效雷达间隔超过该值时仍匹配，但不写入占据栅格 |
-| `skip_insert_while_turning_radians` | 0.06 | 本圈轮速或匹配转角超过该值时不写入 |
+| `skip_insert_after_gap_seconds` | 0.25（机端 live 常用 0.5） | 相邻有效雷达间隔超过该值时仍匹配，但不写入占据栅格 |
+| `skip_insert_while_turning_radians` | 0.06 | 本圈相对上一帧的轮速或匹配转角超过该值时不写入 |
+| `skip_insert_destort_yaw_radians` | 0.08 | 本圈首束到末束的里程计航向差超过该值时不写入（帧内畸变） |
+| `skip_insert_peak_segment_seconds` | 0.08 | 帧内滑动窗口长度；与下行一起用于峰值段航向门控 |
+| `skip_insert_peak_segment_yaw_radians` | 0.05 | 任一窗口内里程计 \|yaw\| 超过该值时不写入（局部急转/部分点云畸变） |
+| `skip_insert_half_scan_arm_yaw_radians` | 0.06 | 任一帧间/帧内航向信号超过该值时武装半圈检查 |
+| `skip_insert_half_scan_after_turn_seconds` | 1.0 | 武装保持时间；仅在此窗口内跑半圈匹配 |
+| `skip_insert_half_scan_linear_search_window` | 0.09 | 半圈专用 correlative 平移搜索窗（m） |
+| `skip_insert_half_scan_angular_search_window` | 0.05 | 半圈专用 correlative 航向搜索窗（rad） |
+| `skip_insert_half_scan_yaw_radians` | 0.03 | early/late 半圈位姿航向差超过该值时不写入 |
+| `skip_insert_half_scan_translation_meters` | 0.06 | early/late 半圈位姿平移差超过该值时不写入（与航向为 OR） |
 
 仿真 / `datasets/exploration` / `iilabs3d_offline.yaml` 不得填写。Gazebo 的
 `time_increment == 0`，旋转去畸变不会启用；跳过写入会让探索原地转丢图。
