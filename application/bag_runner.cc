@@ -312,6 +312,7 @@ struct DebugFrame {
   bool inserted = false;
   OccupancyDump map;
   std::vector<Eigen::Vector2d> hits;
+  std::vector<Eigen::Vector2d> rejected_hits;
 };
 
 OccupancyDump WriteOccupancy(const std::string& directory, int index,
@@ -430,6 +431,12 @@ void WriteDebugFrames(const std::string& directory,
       out << "[" << std::setprecision(3) << frame.hits[j].x() << ","
           << frame.hits[j].y() << "]";
     }
+    out << "],\"rejected_hits\":[";
+    for (size_t j = 0; j < frame.rejected_hits.size(); ++j) {
+      if (j != 0) out << ",";
+      out << "[" << std::setprecision(3) << frame.rejected_hits[j].x() << ","
+          << frame.rejected_hits[j].y() << "]";
+    }
     out << "]}";
     if (i + 1 < frames.size()) out << ",";
     out << "\n";
@@ -490,7 +497,8 @@ int main(int argc, char** argv) {
             carto::transform::Rigid2d local_pose,
             carto::sensor::RangeData range_data,
             std::unique_ptr<const carto::mapping::Frontend2D::InsertionResult>
-                insertion) {
+                insertion,
+            carto::sensor::PointCloud rejected_insert_hits) {
           const auto global_from_local =
               map_builder->backend()->GetLocalToGlobalTransform(trajectory_id);
           const auto pose = global_from_local * local_pose;
@@ -506,13 +514,18 @@ int main(int argc, char** argv) {
                                       map_builder->backend());
           }
           frame.map = last_map;
+          // Keep every return so the match pane can show the full sweep
+          // (LD14 is ~600 beams; thinning to ~120 hid most of the cloud).
           const auto& points = range_data.returns.points();
-          const int stride =
-              std::max(1, static_cast<int>(points.size()) / 120);
-          for (size_t i = 0; i < points.size(); i += static_cast<size_t>(stride)) {
-            const Eigen::Vector2d local(points[i].position.x(),
-                                        points[i].position.y());
+          frame.hits.reserve(points.size());
+          for (const auto& point : points) {
+            const Eigen::Vector2d local(point.position.x(), point.position.y());
             frame.hits.push_back(global_from_local * local);
+          }
+          frame.rejected_hits.reserve(rejected_insert_hits.size());
+          for (const auto& point : rejected_insert_hits) {
+            const Eigen::Vector2d local(point.position.x(), point.position.y());
+            frame.rejected_hits.push_back(global_from_local * local);
           }
           debug_frames.push_back(std::move(frame));
         };

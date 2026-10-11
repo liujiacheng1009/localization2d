@@ -157,7 +157,8 @@ void Frontend2D::ProcessSensorData(
     local_slam_result_callback_(
         trajectory_id_, matching_result->time, published_pose,
         std::move(matching_result->range_data_in_local),
-        std::move(insertion_result));
+        std::move(insertion_result),
+        std::move(matching_result->rejected_insert_hits));
   }
 }
 

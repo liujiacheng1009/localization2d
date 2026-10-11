@@ -33,10 +33,10 @@ class Frontend2D {
     std::vector<std::shared_ptr<const Submap>> insertion_submaps;
   };
 
-  using LocalSlamResultCallback =
-      std::function<void(int, common::Time, transform::Rigid2d,
-                         sensor::RangeData,
-                         std::unique_ptr<const InsertionResult>)>;
+  using LocalSlamResultCallback = std::function<void(
+      int, common::Time, transform::Rigid2d, sensor::RangeData,
+      std::unique_ptr<const InsertionResult>,
+      sensor::PointCloud /*rejected_insert_hits*/)>;
 
   struct SensorId {
     enum class SensorType { RANGE, ODOMETRY };
