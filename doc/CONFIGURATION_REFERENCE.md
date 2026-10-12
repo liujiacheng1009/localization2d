@@ -31,7 +31,7 @@ tracking_frame: eve/base_footprint
 | 参数 | 基线 | 作用与权衡 |
 |---|---:|---|
 | `optimize_every_n_nodes` | 10 | 每新增多少 node 触发一次 PGO；越小修正越及时但 CPU 越高 |
-| `optimizer` | `gtsam_isam2` | 位姿图 SPA：`gtsam_isam2`（默认增量）、`ceres`、`gtsam`（batch LM）。**只切换全局位姿图求解**，不替换前端/回环的 `ceres_scan_matcher` |
+| `optimizer` | `isam2` | 位姿图 SPA：`isam2`（默认，GTSAM 增量）或 `ceres`。**只切换全局位姿图求解**，不替换前端/回环的 `ceres_scan_matcher` |
 | `matcher_translation_weight` | 500 | 局部 SLAM 平移约束权重 |
 | `matcher_rotation_weight` | 1600 | 局部 SLAM 旋转约束权重 |
 | `max_num_final_iterations` | 200 | 轨迹结束时最大优化迭代数 |
@@ -85,9 +85,8 @@ A/B 对比见 `tools/compare_pose_backends.py` 与
 | `odometry_translation_weight` | 100 | odometry 平移权重 |
 | `odometry_rotation_weight` | 10 | odometry 旋转权重 |
 | `log_solver_summary` | false | 输出求解器摘要 |
-| `gtsam.max_iterations` | 0→回退 Ceres 迭代数 | `optimizer: gtsam` batch LM；`0` 或缺省时用 `ceres_solver_options.max_num_iterations` |
-| `gtsam.relinearize_threshold` | 0.1 | 仅 `gtsam_isam2`；`<=0` 用库默认 0.1 |
-| `gtsam.relinearize_skip` | 10 | 仅 `gtsam_isam2`；`<=0` 用库默认 10 |
+| `isam2.relinearize_threshold` | 0.1 | 仅 `optimizer: isam2`；`<=0` 用库默认 0.1 |
+| `isam2.relinearize_skip` | 10 | 仅 `optimizer: isam2`；`<=0` 用库默认 10 |
 
 PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` 为 7。它只控制
 `optimizer: ceres` 时单后端 worker 的数值求解并行度，不会并行执行多个 constraint 候选。

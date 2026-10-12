@@ -144,7 +144,7 @@ PoseGraphOptions CreatePoseGraphOptions(
   if (parameter_dictionary->HasKey("optimizer")) {
     options.set_optimizer(parameter_dictionary->GetString("optimizer"));
   } else {
-    options.set_optimizer("gtsam_isam2");
+    options.set_optimizer("isam2");
   }
   *options.mutable_constraint_builder_options() =
       CreateConstraintBuilderOptions(
@@ -320,21 +320,18 @@ OptimizationProblemOptions CreateOptimizationProblemOptions(
   *options.mutable_ceres_solver_options() =
       common::CreateCeresSolverOptionsConfig(
           parameter_dictionary->GetDictionary("ceres_solver_options").get());
-  if (parameter_dictionary->HasKey("gtsam")) {
-    auto gtsam = parameter_dictionary->GetDictionary("gtsam");
-    options.mutable_gtsam_options()->set_max_iterations(
-        gtsam->HasKey("max_iterations") ? gtsam->GetInt("max_iterations") : 0);
-    options.mutable_gtsam_options()->set_relinearize_threshold(
-        gtsam->HasKey("relinearize_threshold")
-            ? gtsam->GetDouble("relinearize_threshold")
+  if (parameter_dictionary->HasKey("isam2")) {
+    auto isam2 = parameter_dictionary->GetDictionary("isam2");
+    options.mutable_isam2_options()->set_relinearize_threshold(
+        isam2->HasKey("relinearize_threshold")
+            ? isam2->GetDouble("relinearize_threshold")
             : 0.);
-    options.mutable_gtsam_options()->set_relinearize_skip(
-        gtsam->HasKey("relinearize_skip") ? gtsam->GetInt("relinearize_skip")
+    options.mutable_isam2_options()->set_relinearize_skip(
+        isam2->HasKey("relinearize_skip") ? isam2->GetInt("relinearize_skip")
                                           : 0);
   } else {
-    options.mutable_gtsam_options()->set_max_iterations(0);
-    options.mutable_gtsam_options()->set_relinearize_threshold(0.);
-    options.mutable_gtsam_options()->set_relinearize_skip(0);
+    options.mutable_isam2_options()->set_relinearize_threshold(0.);
+    options.mutable_isam2_options()->set_relinearize_skip(0);
   }
   return options;
 }

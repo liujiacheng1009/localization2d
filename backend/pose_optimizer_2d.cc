@@ -11,8 +11,7 @@
 
 #include "absl/memory/memory.h"
 #include "cartographer/backend/ceres_pose_optimizer_2d.h"
-#include "cartographer/backend/gtsam_isam2_pose_optimizer_2d.h"
-#include "cartographer/backend/gtsam_pose_optimizer_2d.h"
+#include "cartographer/backend/isam2_pose_optimizer_2d.h"
 #include "cartographer/foundation/transform.h"
 #include "cartographer/foundation/utils.h"
 #include "glog/logging.h"
@@ -124,14 +123,11 @@ std::unique_ptr<PoseOptimizer2D> CreatePoseOptimizer2D(
   if (name == "ceres") {
     return absl::make_unique<CeresPoseOptimizer2D>(opt);
   }
-  if (name == "gtsam") {
-    return absl::make_unique<GtsamBatchPoseOptimizer2D>(opt);
-  }
-  if (name == "gtsam_isam2" || name.empty()) {
-    return absl::make_unique<GtsamIsam2PoseOptimizer2D>(opt);
+  if (name == "isam2" || name.empty()) {
+    return absl::make_unique<Isam2PoseOptimizer2D>(opt);
   }
   LOG(FATAL) << "Unknown pose_graph.optimizer '" << name
-             << "' (expected ceres|gtsam|gtsam_isam2)";
+             << "' (expected ceres|isam2)";
   return nullptr;
 }
 

@@ -44,7 +44,7 @@ struct SubmapSpec2D {
   transform::Rigid2d global_pose;
 };
 
-// Per-Solve timing for backend comparison (ceres vs gtsam).
+// Per-Solve timing for backend comparison (ceres vs isam2).
 struct SolveMetric {
   int index = 0;
   double wall_seconds = 0.;

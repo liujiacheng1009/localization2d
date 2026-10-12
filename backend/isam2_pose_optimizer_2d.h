@@ -1,8 +1,8 @@
 // Copyright 2026 The SweepNav Authors
 // Licensed under the Apache License, Version 2.0 (the "License").
 
-#ifndef CARTOGRAPHER_BACKEND_GTSAM_ISAM2_POSE_OPTIMIZER_2D_H_
-#define CARTOGRAPHER_BACKEND_GTSAM_ISAM2_POSE_OPTIMIZER_2D_H_
+#ifndef CARTOGRAPHER_BACKEND_ISAM2_POSE_OPTIMIZER_2D_H_
+#define CARTOGRAPHER_BACKEND_ISAM2_POSE_OPTIMIZER_2D_H_
 
 #include <set>
 #include <utility>
@@ -15,10 +15,10 @@ namespace mapping {
 namespace optimization {
 
 // Incremental SPA via GTSAM ISAM2 (same optimize_every_n_nodes trigger).
-class GtsamIsam2PoseOptimizer2D : public PoseOptimizer2D {
+class Isam2PoseOptimizer2D : public PoseOptimizer2D {
  public:
-  explicit GtsamIsam2PoseOptimizer2D(const OptimizationProblemOptions& options);
-  ~GtsamIsam2PoseOptimizer2D() override = default;
+  explicit Isam2PoseOptimizer2D(const OptimizationProblemOptions& options);
+  ~Isam2PoseOptimizer2D() override = default;
 
   void TrimTrajectoryNode(const NodeId& node_id) override;
   void TrimSubmap(const SubmapId& submap_id) override;
@@ -45,4 +45,4 @@ class GtsamIsam2PoseOptimizer2D : public PoseOptimizer2D {
 }  // namespace mapping
 }  // namespace cartographer
 
-#endif  // CARTOGRAPHER_BACKEND_GTSAM_ISAM2_POSE_OPTIMIZER_2D_H_
+#endif  // CARTOGRAPHER_BACKEND_ISAM2_POSE_OPTIMIZER_2D_H_

@@ -55,8 +55,7 @@ set(ALL_LIBRARY_SRCS
   frontend/motion_filter.cc
   backend/pose_optimizer_2d.cc
   backend/ceres_pose_optimizer_2d.cc
-  backend/gtsam_pose_optimizer_2d.cc
-  backend/gtsam_isam2_pose_optimizer_2d.cc
+  backend/isam2_pose_optimizer_2d.cc
   application/slam_options.cc
   backend/overlapping_submaps_trimmer_2d.cc
   frontend/pose_extrapolator.cc

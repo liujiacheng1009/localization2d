@@ -210,9 +210,7 @@ struct LocalTrajectoryBuilderOptions2D {
   SubmapsOptions2D* mutable_submaps_options() { return &submaps_options_; }
 };
 
-struct GtsamOptimizerOptions {
-  // LM max iterations for batch GTSAM; 0 => fall back to ceres_solver_options.
-  CARTOGRAPHER_OPTION_SCALAR(int, max_iterations)
+struct Isam2OptimizerOptions {
   // ISAM2 relinearize knobs; <=0 uses library defaults (0.1 / 10).
   CARTOGRAPHER_OPTION_SCALAR(double, relinearize_threshold)
   CARTOGRAPHER_OPTION_SCALAR(int, relinearize_skip)
@@ -226,11 +224,11 @@ struct OptimizationProblemOptions {
   CARTOGRAPHER_OPTION_SCALAR(double, odometry_rotation_weight)
   CARTOGRAPHER_OPTION_SCALAR(bool, log_solver_summary)
   CARTOGRAPHER_OPTION_FIELD(CeresSolverOptions, ceres_solver_options)
-  CARTOGRAPHER_OPTION_FIELD(GtsamOptimizerOptions, gtsam_options)
+  CARTOGRAPHER_OPTION_FIELD(Isam2OptimizerOptions, isam2_options)
   CeresSolverOptions* mutable_ceres_solver_options() {
     return &ceres_solver_options_;
   }
-  GtsamOptimizerOptions* mutable_gtsam_options() { return &gtsam_options_; }
+  Isam2OptimizerOptions* mutable_isam2_options() { return &isam2_options_; }
 };
 
 struct ConstraintBuilderOptions {
@@ -261,7 +259,7 @@ struct PoseGraphOptions {
     CARTOGRAPHER_OPTION_SCALAR(int, min_added_submaps_count)
   };
   CARTOGRAPHER_OPTION_SCALAR(int, optimize_every_n_nodes)
-  // Pose-graph SPA: "gtsam_isam2" (default) | "ceres" | "gtsam" (batch LM).
+  // Pose-graph SPA: "isam2" (default) | "ceres".
   CARTOGRAPHER_OPTION_FIELD(std::string, optimizer)
   CARTOGRAPHER_OPTION_SCALAR(double, matcher_translation_weight)
   CARTOGRAPHER_OPTION_SCALAR(double, matcher_rotation_weight)

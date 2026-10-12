@@ -132,7 +132,7 @@ class TrajectoryBackend2D {
   sensor::MapByTime<sensor::OdometryData> GetOdometryData() const
       LOCKS_EXCLUDED(mutex_);
   std::vector<Constraint> constraints() const LOCKS_EXCLUDED(mutex_);
-  // Solve timings recorded by the active pose optimizer (ceres|gtsam).
+  // Solve timings recorded by the active pose optimizer (ceres|isam2).
   std::vector<optimization::SolveMetric> GetOptimizationSolveMetrics() const
       LOCKS_EXCLUDED(mutex_);
   std::string GetPoseOptimizerBackendName() const LOCKS_EXCLUDED(mutex_);
