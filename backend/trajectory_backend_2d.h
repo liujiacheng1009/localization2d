@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -131,6 +132,10 @@ class TrajectoryBackend2D {
   sensor::MapByTime<sensor::OdometryData> GetOdometryData() const
       LOCKS_EXCLUDED(mutex_);
   std::vector<Constraint> constraints() const LOCKS_EXCLUDED(mutex_);
+  // Solve timings recorded by the active pose optimizer (ceres|gtsam).
+  std::vector<optimization::SolveMetric> GetOptimizationSolveMetrics() const
+      LOCKS_EXCLUDED(mutex_);
+  std::string GetPoseOptimizerBackendName() const LOCKS_EXCLUDED(mutex_);
   void SetInitialTrajectoryPose(int from_trajectory_id, int to_trajectory_id,
                                 const transform::Rigid2d& pose,
                                 const common::Time time)

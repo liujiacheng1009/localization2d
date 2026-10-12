@@ -595,6 +595,49 @@ void WriteSubmapJson(std::ostream& out, const PoseGraphSubmapDump& s) {
       << ",\"yaw\":" << s.yaw << "}";
 }
 
+void WriteOptimizerMetrics(
+    const std::string& directory, carto::mapping::TrajectoryBackend2D* backend,
+    const double bag_wall_seconds, const double bag_cpu_seconds,
+    const long peak_rss_kib) {
+  if (directory.empty() || backend == nullptr) return;
+  const std::string path = directory + "/optimizer_metrics.json";
+  std::ofstream out(path);
+  CHECK(out) << "Cannot write optimizer metrics '" << path << "'.";
+  const auto metrics = backend->GetOptimizationSolveMetrics();
+  double solve_wall_sum = 0.;
+  double solve_cpu_sum = 0.;
+  double solve_wall_max = 0.;
+  for (const auto& m : metrics) {
+    solve_wall_sum += m.wall_seconds;
+    solve_cpu_sum += m.cpu_seconds;
+    solve_wall_max = std::max(solve_wall_max, m.wall_seconds);
+  }
+  out << std::fixed << "{\n"
+      << "\"backend\":\"" << backend->GetPoseOptimizerBackendName() << "\",\n"
+      << "\"bag_wall_seconds\":" << std::setprecision(6) << bag_wall_seconds
+      << ",\n"
+      << "\"bag_cpu_seconds\":" << bag_cpu_seconds << ",\n"
+      << "\"peak_rss_kib\":" << peak_rss_kib << ",\n"
+      << "\"solve_count\":" << metrics.size() << ",\n"
+      << "\"solve_wall_sum_seconds\":" << solve_wall_sum << ",\n"
+      << "\"solve_cpu_sum_seconds\":" << solve_cpu_sum << ",\n"
+      << "\"solve_wall_max_seconds\":" << solve_wall_max << ",\n"
+      << "\"solve_wall_fraction\":"
+      << (bag_wall_seconds > 0. ? solve_wall_sum / bag_wall_seconds : 0.)
+      << ",\n"
+      << "\"solves\":[\n";
+  for (size_t i = 0; i < metrics.size(); ++i) {
+    const auto& m = metrics[i];
+    if (i != 0) out << ",\n";
+    out << " {\"index\":" << m.index << ",\"wall_seconds\":" << m.wall_seconds
+        << ",\"cpu_seconds\":" << m.cpu_seconds
+        << ",\"num_nodes\":" << m.num_nodes
+        << ",\"num_submaps\":" << m.num_submaps
+        << ",\"num_constraints\":" << m.num_constraints << "}";
+  }
+  out << "\n]\n}\n";
+}
+
 void WritePoseGraph(const std::string& directory, const PoseGraphDump& dump) {
   if (directory.empty()) return;
   const std::string path = directory + "/pose_graph.json";
@@ -905,7 +948,8 @@ int main(int argc, char** argv) {
   LOG(INFO) << "Elapsed wall clock time: " << wall_seconds << " s";
   timespec cpu = {};
   clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu);
-  LOG(INFO) << "Elapsed CPU time: " << cpu.tv_sec + 1e-9 * cpu.tv_nsec << " s";
+  const double cpu_seconds = cpu.tv_sec + 1e-9 * cpu.tv_nsec;
+  LOG(INFO) << "Elapsed CPU time: " << cpu_seconds << " s";
   rusage usage = {};
   CHECK_EQ(getrusage(RUSAGE_SELF, &usage), 0);
   LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
@@ -919,6 +963,12 @@ int main(int argc, char** argv) {
     pose_graph_dump.constraints =
         CollectConstraints(backend, nullptr, nullptr, nullptr);
     WritePoseGraph(FLAGS_debug_step_directory, pose_graph_dump);
+    WriteOptimizerMetrics(FLAGS_debug_step_directory, backend, wall_seconds,
+                          cpu_seconds, usage.ru_maxrss);
+    if (FLAGS_trajectory_filename.empty()) {
+      WriteTrajectory(FLAGS_debug_step_directory + "/trajectory.csv",
+                      trajectory_id, backend);
+    }
   }
   if (!FLAGS_offline_save_state_filename.empty()) {
     CHECK(map_builder->SerializeStateToFile(

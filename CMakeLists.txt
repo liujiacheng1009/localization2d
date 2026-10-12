@@ -26,6 +26,7 @@ get_filename_component(CARTOGRAPHER_SOURCE_PARENT
 find_package(absl REQUIRED)
 find_package(Ceres REQUIRED COMPONENTS SuiteSparse)
 find_package(Eigen3 REQUIRED)
+find_package(GTSAM REQUIRED)
 find_package(Sophus 1.22.10 CONFIG REQUIRED)
 find_package(gflags REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -53,6 +54,9 @@ set(ALL_LIBRARY_SRCS
   application/slam_system.cc
   frontend/motion_filter.cc
   backend/pose_optimizer_2d.cc
+  backend/ceres_pose_optimizer_2d.cc
+  backend/gtsam_pose_optimizer_2d.cc
+  backend/gtsam_isam2_pose_optimizer_2d.cc
   application/slam_options.cc
   backend/overlapping_submaps_trimmer_2d.cc
   frontend/pose_extrapolator.cc
@@ -73,6 +77,7 @@ target_link_libraries(cartographer_offline_core PUBLIC Sophus::Sophus)
 target_include_directories(cartographer_offline_core SYSTEM PUBLIC
   "${CERES_INCLUDE_DIRS}")
 target_link_libraries(cartographer_offline_core PUBLIC ${CERES_LIBRARIES})
+target_link_libraries(cartographer_offline_core PUBLIC gtsam)
 
 target_link_libraries(cartographer_offline_core PUBLIC yaml-cpp)
 

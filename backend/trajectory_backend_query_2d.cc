@@ -254,6 +254,17 @@ std::vector<Constraint> TrajectoryBackend2D::constraints() const {
   return result;
 }
 
+std::vector<optimization::SolveMetric>
+TrajectoryBackend2D::GetOptimizationSolveMetrics() const {
+  absl::MutexLock locker(&mutex_);
+  return optimization_problem_->solve_metrics();
+}
+
+std::string TrajectoryBackend2D::GetPoseOptimizerBackendName() const {
+  absl::MutexLock locker(&mutex_);
+  return optimization_problem_->backend_name();
+}
+
 void TrajectoryBackend2D::SetInitialTrajectoryPose(const int from_trajectory_id,
                                          const int to_trajectory_id,
                                          const transform::Rigid2d& pose,

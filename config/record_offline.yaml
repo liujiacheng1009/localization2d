@@ -7,6 +7,8 @@ map_builder:
   pose_graph:
     # Smaller => loop corrections apply sooner; watch CPU if backend falls behind.
     optimize_every_n_nodes: 10
+    # SPA backend: ceres | gtsam (batch LM) | gtsam_isam2 (incremental, default).
+    optimizer: gtsam_isam2
     constraint_builder:
       sampling_ratio: 0.15
       max_constraint_distance: 12.0
@@ -40,6 +42,10 @@ map_builder:
         use_nonmonotonic_steps: false
         max_num_iterations: 50
         num_threads: 4
+      gtsam:
+        max_iterations: 50
+        relinearize_threshold: 0.1
+        relinearize_skip: 10
     max_num_final_iterations: 100
     global_sampling_ratio: 0.003
     log_residual_histograms: true

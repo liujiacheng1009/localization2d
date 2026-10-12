@@ -86,8 +86,9 @@ SlamSystem::SlamSystem(const SlamSystemOptions& options) : options_(options) {
   CHECK(options.use_trajectory_builder_2d());
   backend_ = absl::make_unique<TrajectoryBackend2D>(
       options_.pose_graph_options(),
-      absl::make_unique<optimization::PoseOptimizer2D>(
-          options_.pose_graph_options().optimization_problem_options()));
+      optimization::CreatePoseOptimizer2D(options_.pose_graph_options()));
+  LOG(INFO) << "Pose graph optimizer backend: "
+            << options_.pose_graph_options().optimizer();
   CHECK(!options.collate_by_trajectory());
   data_dispatcher_ = absl::make_unique<sensor::DataDispatcher>();
 }

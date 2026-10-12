@@ -31,6 +31,7 @@ tracking_frame: eve/base_footprint
 | 参数 | 基线 | 作用与权衡 |
 |---|---:|---|
 | `optimize_every_n_nodes` | 10 | 每新增多少 node 触发一次 PGO；越小修正越及时但 CPU 越高 |
+| `optimizer` | `gtsam_isam2` | 位姿图 SPA：`gtsam_isam2`（默认增量）、`ceres`、`gtsam`（batch LM）。**只切换全局位姿图求解**，不替换前端/回环的 `ceres_scan_matcher` |
 | `matcher_translation_weight` | 500 | 局部 SLAM 平移约束权重 |
 | `matcher_rotation_weight` | 1600 | 局部 SLAM 旋转约束权重 |
 | `max_num_final_iterations` | 200 | 轨迹结束时最大优化迭代数 |
@@ -39,6 +40,9 @@ tracking_frame: eve/base_footprint
 
 把 `optimize_every_n_nodes` 设为较小值会频繁形成同步屏障。离线吞吐优先时应结合回环密度
 和最终优化评估，不要只追求更频繁的 PGO。
+
+A/B 对比见 `tools/compare_pose_backends.py` 与
+`software/rk3399/fix/LOCALIZATION_GTSAM_LOOP_BACKEND.md`。
 
 ## `pose_graph.constraint_builder`
 
@@ -75,15 +79,19 @@ tracking_frame: eve/base_footprint
 
 | 参数 | 基线 | 说明 |
 |---|---:|---|
-| `huber_scale` | 10 | 约束鲁棒损失尺度 |
+| `huber_scale` | 10 | 约束鲁棒损失尺度（Ceres HuberLoss / GTSAM Huber mEstimator） |
 | `local_slam_pose_translation_weight` | 100000 | 连续局部位姿平移权重 |
 | `local_slam_pose_rotation_weight` | 100000 | 连续局部位姿旋转权重 |
 | `odometry_translation_weight` | 100 | odometry 平移权重 |
 | `odometry_rotation_weight` | 10 | odometry 旋转权重 |
-| `log_solver_summary` | false | 输出 Ceres 完整摘要 |
+| `log_solver_summary` | false | 输出求解器摘要 |
+| `gtsam.max_iterations` | 0→回退 Ceres 迭代数 | `optimizer: gtsam` batch LM；`0` 或缺省时用 `ceres_solver_options.max_num_iterations` |
+| `gtsam.relinearize_threshold` | 0.1 | 仅 `gtsam_isam2`；`<=0` 用库默认 0.1 |
+| `gtsam.relinearize_skip` | 10 | 仅 `gtsam_isam2`；`<=0` 用库默认 10 |
 
 PGO 的 `ceres_solver_options.max_num_iterations` 基线为 50，`num_threads` 为 7。它只控制
-单后端 worker 调用 Ceres 后的数值求解并行度，不会并行执行多个 constraint 候选。
+`optimizer: ceres` 时单后端 worker 的数值求解并行度，不会并行执行多个 constraint 候选。
+扫描匹配精修仍始终走 `constraint_builder.ceres_scan_matcher` / 前端 `ceres_scan_matcher`。
 
 ## `trajectory_builder.trajectory_builder_2d`
 
