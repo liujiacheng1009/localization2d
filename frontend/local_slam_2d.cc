@@ -774,19 +774,17 @@ std::unique_ptr<LocalSlam2D::MatchingResult> LocalSlam2D::HoldLastPose(
 
 std::unique_ptr<LocalSlam2D::InsertionResult> LocalSlam2D::ResumeMapping(
     const common::Time time, const transform::Rigid2d& local_pose,
-    const sensor::RangeData& tracking_range_data) {
+    const sensor::RangeData& /*tracking_range_data*/) {
   CHECK(extrapolator_ != nullptr);
   suspended_ = false;
   bad_match_streak_ = 0;
   extrapolator_->AddPose(time, local_pose);
   has_range_pose_ = true;
-  const sensor::PointCloud filtered = sensor::AdaptiveVoxelFilter(
-      tracking_range_data.returns, options_.adaptive_voxel_filter_options());
-  const sensor::RangeData range_data_in_local = TransformRangeData(
-      tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
-  LOG(INFO) << "Relocalization stayed at the held pose; mapping resumes";
-  return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose,
-                          nullptr);
+  // Stay means the held pose is still usable. Do not paint here: that used to
+  // bypass turning/destort/far-disagree gates and write bent scans (e.g. f2358).
+  LOG(INFO) << "Relocalization stayed at the held pose; mapping resumes "
+               "without insert";
+  return nullptr;
 }
 
 void LocalSlam2D::AddOdometryData(

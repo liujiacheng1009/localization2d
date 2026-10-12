@@ -88,7 +88,8 @@ class LocalSlam2D {
   std::unique_ptr<InsertionResult> CommitRelocalizedPose(
       common::Time time, const transform::Rigid2d& local_pose,
       const sensor::RangeData& tracking_range_data);
-  // The search found the held pose again. Keep the current submap and insert.
+  // Stay: held pose is still valid. Unsuspend tracking without painting —
+  // skip_insert_* gates must apply on the next normal frames.
   std::unique_ptr<InsertionResult> ResumeMapping(
       common::Time time, const transform::Rigid2d& local_pose,
       const sensor::RangeData& tracking_range_data);
