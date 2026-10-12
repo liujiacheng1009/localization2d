@@ -5,7 +5,8 @@ map_builder:
   use_trajectory_builder_2d: true
   collate_by_trajectory: false
   pose_graph:
-    optimize_every_n_nodes: 20
+    # Smaller => loop corrections apply sooner; watch CPU if backend falls behind.
+    optimize_every_n_nodes: 10
     constraint_builder:
       sampling_ratio: 0.15
       max_constraint_distance: 12.0

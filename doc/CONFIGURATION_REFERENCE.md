@@ -30,7 +30,7 @@ tracking_frame: eve/base_footprint
 
 | 参数 | 基线 | 作用与权衡 |
 |---|---:|---|
-| `optimize_every_n_nodes` | 20 | 每新增多少 node 触发一次 PGO；越小修正越及时但 CPU 越高 |
+| `optimize_every_n_nodes` | 10 | 每新增多少 node 触发一次 PGO；越小修正越及时但 CPU 越高 |
 | `matcher_translation_weight` | 500 | 局部 SLAM 平移约束权重 |
 | `matcher_rotation_weight` | 1600 | 局部 SLAM 旋转约束权重 |
 | `max_num_final_iterations` | 200 | 轨迹结束时最大优化迭代数 |
