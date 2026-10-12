@@ -749,6 +749,18 @@ LocalSlam2D::CommitRelocalizedPose(
       tracking_range_data, transform::Embed3D(local_pose.cast<float>()));
   LOG(INFO) << "Relocalized local pose to (" << local_pose.translation().x()
             << ", " << local_pose.translation().y() << ")";
+  // Reloc confirm used to paint unconditionally and bypass skip_insert_*.
+  // Require the cloud to agree with the new active submap before inserting.
+  double min_agree = options_.tracking_min_match_agree_ratio();
+  if (min_agree <= 0.) {
+    min_agree = 0.35;
+  }
+  const double agree = MatchAgreeRatio(local_pose, filtered);
+  if (agree < min_agree) {
+    LOG(WARNING) << "Relocalization jump pose accepted but skip insert: agree="
+                 << agree << " min=" << min_agree;
+    return nullptr;
+  }
   return InsertIntoSubmap(time, range_data_in_local, filtered, local_pose,
                           nullptr);
 }

@@ -83,8 +83,8 @@ class LocalSlam2D {
   // IMU sample arrives. Scan matching reads this on the mapping thread.
   void SetChassisTilt(double tilt_radians);
   bool IsTracking() const { return !suspended_; }
-  // Jump to a pose found in a finished submap and insert there, instead of
-  // painting the scan into the submap the robot was carried away from.
+  // Jump to a pose found in a finished submap. Inserts only when the cloud
+  // agrees with the (new) active submap; otherwise only the pose is updated.
   std::unique_ptr<InsertionResult> CommitRelocalizedPose(
       common::Time time, const transform::Rigid2d& local_pose,
       const sensor::RangeData& tracking_range_data);
