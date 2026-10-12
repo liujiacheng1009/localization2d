@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -15,8 +16,10 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cartographer/application/config.h"
@@ -24,6 +27,7 @@
 #include "cartographer/foundation/transform.h"
 #include "cartographer/foundation/transform.h"
 #include "cartographer/application/slam_system.h"
+#include "cartographer/backend/backend_types.h"
 #include "cartographer/frontend/frontend_2d.h"
 #include "cartographer/mapping/grid_2d.h"
 #include "cartographer/mapping/submap_2d.h"
@@ -446,6 +450,222 @@ void WriteDebugFrames(const std::string& directory,
   LOG(INFO) << "Wrote " << frames.size() << " debug steps to " << directory;
 }
 
+using ConstraintKey = std::array<int, 4>;
+
+ConstraintKey MakeConstraintKey(const carto::mapping::Constraint& c) {
+  return {c.submap_id.trajectory_id, c.submap_id.submap_index,
+          c.node_id.trajectory_id, c.node_id.node_index};
+}
+
+struct PoseGraphNodeDump {
+  int tid = 0;
+  int nid = 0;
+  double t = 0.;
+  double x = 0.;
+  double y = 0.;
+  double yaw = 0.;
+};
+
+struct PoseGraphSubmapDump {
+  int tid = 0;
+  int sid = 0;
+  double x = 0.;
+  double y = 0.;
+  double yaw = 0.;
+};
+
+struct PoseGraphConstraintDump {
+  int submap_tid = 0;
+  int submap_sid = 0;
+  int node_tid = 0;
+  int node_nid = 0;
+  std::string tag;
+  double tx = 0.;
+  double ty = 0.;
+  double tyaw = 0.;
+};
+
+struct PoseGraphNodeDelta {
+  int tid = 0;
+  int nid = 0;
+  double dx = 0.;
+  double dy = 0.;
+  double d_m = 0.;
+};
+
+struct PoseGraphOptEvent {
+  int index = 0;
+  int frame = -1;
+  double t = 0.;
+  int inter_total = 0;
+  int intra_total = 0;
+  double max_delta_m = 0.;
+  std::vector<ConstraintKey> new_inter;
+  std::vector<PoseGraphNodeDelta> node_deltas;
+  std::vector<PoseGraphNodeDump> nodes;
+  std::vector<PoseGraphSubmapDump> submaps;
+  std::vector<PoseGraphConstraintDump> constraints;
+};
+
+struct PoseGraphDump {
+  std::vector<PoseGraphNodeDump> nodes;
+  std::vector<PoseGraphSubmapDump> submaps;
+  std::vector<PoseGraphConstraintDump> constraints;
+  std::vector<PoseGraphOptEvent> events;
+};
+
+std::vector<PoseGraphNodeDump> CollectNodes(
+    carto::mapping::TrajectoryBackend2D* backend) {
+  std::vector<PoseGraphNodeDump> nodes;
+  for (const auto& item : backend->GetTrajectoryNodes()) {
+    PoseGraphNodeDump node;
+    node.tid = item.id.trajectory_id;
+    node.nid = item.id.node_index;
+    node.t = ToUnixSeconds(item.data.time());
+    node.x = item.data.global_pose.translation().x();
+    node.y = item.data.global_pose.translation().y();
+    node.yaw = carto::transform::Yaw(item.data.global_pose);
+    nodes.push_back(node);
+  }
+  return nodes;
+}
+
+std::vector<PoseGraphSubmapDump> CollectSubmaps(
+    carto::mapping::TrajectoryBackend2D* backend) {
+  std::vector<PoseGraphSubmapDump> submaps;
+  for (const auto& item : backend->GetAllSubmapData()) {
+    PoseGraphSubmapDump submap;
+    submap.tid = item.id.trajectory_id;
+    submap.sid = item.id.submap_index;
+    submap.x = item.data.pose.translation().x();
+    submap.y = item.data.pose.translation().y();
+    submap.yaw = carto::transform::Yaw(item.data.pose);
+    submaps.push_back(submap);
+  }
+  return submaps;
+}
+
+std::vector<PoseGraphConstraintDump> CollectConstraints(
+    carto::mapping::TrajectoryBackend2D* backend, int* inter_total,
+    int* intra_total, std::set<ConstraintKey>* inter_keys) {
+  std::vector<PoseGraphConstraintDump> constraints;
+  int inter = 0;
+  int intra = 0;
+  for (const auto& c : backend->constraints()) {
+    PoseGraphConstraintDump dump;
+    dump.submap_tid = c.submap_id.trajectory_id;
+    dump.submap_sid = c.submap_id.submap_index;
+    dump.node_tid = c.node_id.trajectory_id;
+    dump.node_nid = c.node_id.node_index;
+    dump.tag = c.tag == carto::mapping::Constraint::INTER_SUBMAP ? "INTER"
+                                                                 : "INTRA";
+    dump.tx = c.pose.zbar_ij.translation().x();
+    dump.ty = c.pose.zbar_ij.translation().y();
+    dump.tyaw = carto::transform::Yaw(c.pose.zbar_ij);
+    if (c.tag == carto::mapping::Constraint::INTER_SUBMAP) {
+      ++inter;
+      if (inter_keys != nullptr) inter_keys->insert(MakeConstraintKey(c));
+    } else {
+      ++intra;
+    }
+    constraints.push_back(dump);
+  }
+  if (inter_total != nullptr) *inter_total = inter;
+  if (intra_total != nullptr) *intra_total = intra;
+  return constraints;
+}
+
+void WriteConstraintJson(std::ostream& out, const PoseGraphConstraintDump& c) {
+  out << "{\"submap\":[" << c.submap_tid << "," << c.submap_sid << "],\"node\":["
+      << c.node_tid << "," << c.node_nid << "],\"tag\":\"" << c.tag << "\""
+      << ",\"tx\":" << std::setprecision(4) << c.tx << ",\"ty\":" << c.ty
+      << ",\"tyaw\":" << c.tyaw << "}";
+}
+
+void WriteNodeJson(std::ostream& out, const PoseGraphNodeDump& n) {
+  out << "{\"tid\":" << n.tid << ",\"nid\":" << n.nid
+      << ",\"t\":" << std::setprecision(6) << n.t
+      << ",\"x\":" << std::setprecision(4) << n.x << ",\"y\":" << n.y
+      << ",\"yaw\":" << n.yaw << "}";
+}
+
+void WriteSubmapJson(std::ostream& out, const PoseGraphSubmapDump& s) {
+  out << "{\"tid\":" << s.tid << ",\"sid\":" << s.sid
+      << ",\"x\":" << std::setprecision(4) << s.x << ",\"y\":" << s.y
+      << ",\"yaw\":" << s.yaw << "}";
+}
+
+void WritePoseGraph(const std::string& directory, const PoseGraphDump& dump) {
+  if (directory.empty()) return;
+  const std::string path = directory + "/pose_graph.json";
+  std::ofstream out(path);
+  CHECK(out) << "Cannot write pose graph '" << path << "'.";
+  out << std::fixed << "{\n\"nodes\":[\n";
+  for (size_t i = 0; i < dump.nodes.size(); ++i) {
+    if (i != 0) out << ",\n";
+    out << " ";
+    WriteNodeJson(out, dump.nodes[i]);
+  }
+  out << "\n],\"submaps\":[\n";
+  for (size_t i = 0; i < dump.submaps.size(); ++i) {
+    if (i != 0) out << ",\n";
+    out << " ";
+    WriteSubmapJson(out, dump.submaps[i]);
+  }
+  out << "\n],\"constraints\":[\n";
+  for (size_t i = 0; i < dump.constraints.size(); ++i) {
+    if (i != 0) out << ",\n";
+    out << " ";
+    WriteConstraintJson(out, dump.constraints[i]);
+  }
+  out << "\n],\"events\":[\n";
+  for (size_t i = 0; i < dump.events.size(); ++i) {
+    const auto& event = dump.events[i];
+    if (i != 0) out << ",\n";
+    out << " {\"index\":" << event.index << ",\"frame\":" << event.frame
+        << ",\"t\":" << std::setprecision(6) << event.t
+        << ",\"inter_total\":" << event.inter_total
+        << ",\"intra_total\":" << event.intra_total
+        << ",\"max_delta_m\":" << std::setprecision(4) << event.max_delta_m
+        << ",\"new_inter\":[";
+    for (size_t j = 0; j < event.new_inter.size(); ++j) {
+      if (j != 0) out << ",";
+      const auto& key = event.new_inter[j];
+      out << "{\"submap\":[" << key[0] << "," << key[1] << "],\"node\":["
+          << key[2] << "," << key[3] << "]}";
+    }
+    out << "],\"node_deltas\":[";
+    for (size_t j = 0; j < event.node_deltas.size(); ++j) {
+      if (j != 0) out << ",";
+      const auto& d = event.node_deltas[j];
+      out << "{\"tid\":" << d.tid << ",\"nid\":" << d.nid
+          << ",\"dx\":" << std::setprecision(4) << d.dx << ",\"dy\":" << d.dy
+          << ",\"d_m\":" << d.d_m << "}";
+    }
+    out << "],\"nodes\":[";
+    for (size_t j = 0; j < event.nodes.size(); ++j) {
+      if (j != 0) out << ",";
+      WriteNodeJson(out, event.nodes[j]);
+    }
+    out << "],\"submaps\":[";
+    for (size_t j = 0; j < event.submaps.size(); ++j) {
+      if (j != 0) out << ",";
+      WriteSubmapJson(out, event.submaps[j]);
+    }
+    out << "],\"constraints\":[";
+    for (size_t j = 0; j < event.constraints.size(); ++j) {
+      if (j != 0) out << ",";
+      WriteConstraintJson(out, event.constraints[j]);
+    }
+    out << "]}";
+  }
+  out << "\n]}\n";
+  CHECK(out);
+  LOG(INFO) << "Wrote pose graph with " << dump.events.size()
+            << " optimization events, " << dump.constraints.size()
+            << " constraints to " << directory;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -488,6 +708,12 @@ int main(int argc, char** argv) {
        "odom"}};
   std::vector<DebugFrame> debug_frames;
   OccupancyDump last_map;
+  std::mutex pose_graph_mutex;
+  int latest_frame_index = -1;
+  double latest_frame_t = 0.;
+  PoseGraphDump pose_graph_dump;
+  std::map<std::pair<int, int>, Eigen::Vector2d> previous_node_xy;
+  std::set<ConstraintKey> previous_inter_keys;
   carto::mapping::SlamSystem::LocalSlamResultCallback debug_callback;
   if (!FLAGS_debug_step_directory.empty()) {
     std::filesystem::create_directories(
@@ -528,7 +754,59 @@ int main(int argc, char** argv) {
             frame.rejected_hits.push_back(global_from_local * local);
           }
           debug_frames.push_back(std::move(frame));
+          {
+            std::lock_guard<std::mutex> lock(pose_graph_mutex);
+            latest_frame_index = static_cast<int>(debug_frames.size()) - 1;
+            latest_frame_t = debug_frames.back().t;
+          }
         };
+    map_builder->backend()->SetGlobalSlamOptimizationCallback(
+        [&](const std::map<int, carto::mapping::SubmapId>& /*submaps*/,
+            const std::map<int, carto::mapping::NodeId>& /*nodes*/) {
+          auto* backend = map_builder->backend();
+          PoseGraphOptEvent event;
+          {
+            std::lock_guard<std::mutex> lock(pose_graph_mutex);
+            event.index = static_cast<int>(pose_graph_dump.events.size());
+            event.frame = latest_frame_index;
+            event.t = latest_frame_t;
+          }
+          event.nodes = CollectNodes(backend);
+          event.submaps = CollectSubmaps(backend);
+          std::set<ConstraintKey> inter_keys;
+          event.constraints = CollectConstraints(
+              backend, &event.inter_total, &event.intra_total, &inter_keys);
+          for (const auto& key : inter_keys) {
+            if (previous_inter_keys.count(key) == 0) {
+              event.new_inter.push_back(key);
+            }
+          }
+          for (const auto& node : event.nodes) {
+            const auto id = std::make_pair(node.tid, node.nid);
+            const Eigen::Vector2d xy(node.x, node.y);
+            const auto it = previous_node_xy.find(id);
+            if (it == previous_node_xy.end()) continue;
+            PoseGraphNodeDelta delta;
+            delta.tid = node.tid;
+            delta.nid = node.nid;
+            delta.dx = xy.x() - it->second.x();
+            delta.dy = xy.y() - it->second.y();
+            delta.d_m = std::hypot(delta.dx, delta.dy);
+            if (delta.d_m < 1e-4) continue;
+            event.max_delta_m = std::max(event.max_delta_m, delta.d_m);
+            event.node_deltas.push_back(delta);
+          }
+          previous_node_xy.clear();
+          for (const auto& node : event.nodes) {
+            previous_node_xy[std::make_pair(node.tid, node.nid)] =
+                Eigen::Vector2d(node.x, node.y);
+          }
+          previous_inter_keys = std::move(inter_keys);
+          {
+            std::lock_guard<std::mutex> lock(pose_graph_mutex);
+            pose_graph_dump.events.push_back(std::move(event));
+          }
+        });
   }
   const int trajectory_id = map_builder->AddTrajectoryBuilder(
       sensors, trajectory_options, debug_callback);
@@ -634,6 +912,14 @@ int main(int argc, char** argv) {
   WriteTrajectory(FLAGS_trajectory_filename, trajectory_id,
                   map_builder->backend());
   WriteDebugFrames(FLAGS_debug_step_directory, debug_frames);
+  if (!FLAGS_debug_step_directory.empty()) {
+    auto* backend = map_builder->backend();
+    pose_graph_dump.nodes = CollectNodes(backend);
+    pose_graph_dump.submaps = CollectSubmaps(backend);
+    pose_graph_dump.constraints =
+        CollectConstraints(backend, nullptr, nullptr, nullptr);
+    WritePoseGraph(FLAGS_debug_step_directory, pose_graph_dump);
+  }
   if (!FLAGS_offline_save_state_filename.empty()) {
     CHECK(map_builder->SerializeStateToFile(
         true, FLAGS_offline_save_state_filename));
